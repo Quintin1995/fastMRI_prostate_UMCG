@@ -2,14 +2,15 @@ import argparse
 import logging
 from pathlib import Path
 import sqlite3
-from typing import Tuple, List, Dict
+from typing import Tuple, Dict
 import subprocess
-import glob
 import pydicom
-import h5py
-import pandas as pd
 
-from helper_functions import *
+from assets.util import KEY, create_directory_structure, setup_logger, format_date
+from assets.cipher import encipher
+from assets.operations_sqlite_db import connect_to_database, update_patient_info_in_db, check_mri_date_exists
+from assets.convert_to_mrd import process_mrd_if_needed
+from assets.convert_to_h5 import convert_mrd_to_h5
 
 
 def parse_args(verbose: bool = False):
@@ -88,13 +89,6 @@ def filter_and_sort_patient_dirs(target_dir: Path) -> list:
     return dirs
 
 
-def create_directory_structure(base_path: Path):
-    sub_dirs = ['lesion_bbs', 'recons', 'dicoms', 'mrds', 'h5s', 'rois', 'niftis']
-
-    for sub_dir in sub_dirs:
-        (base_path / sub_dir).mkdir(parents=True, exist_ok=True)
-
-
 def create_and_log_patient_dirs(kspace_dir: Path, out_dir: Path, debug: bool, logger: logging.Logger) -> None:
     """
     Process patient directories to create the required directory structure and
@@ -159,147 +153,6 @@ def get_patient_info(target_dir: Path, logger: logging.Logger, verbose: bool = F
             logger.info(f"Patient Number: {pat_number}, anon_id: {anon_id}, Full Path: {full_path}")
 
     return pat_info
-
-
-def update_patient_info_in_db(
-    cur: sqlite3.Cursor,
-    conn: sqlite3.Connection,
-    table: str,
-    seq_id: str,
-    anon_id: str,
-    pat_dir: Path,
-    logger: logging.Logger
-) -> None:
-    """
-    Update patient information in SQLite database.
-
-    Parameters:
-    cur: SQLite cursor object.
-    conn: SQLite connection object.
-    table (str): Name of the table in the database.
-    seq_id: Sequential ID of the patient.
-    anon_id: Anonymized ID of the patient.
-    pat_dir: Directory path of patient's data.
-    logger: Logger object for logging messages.
-    """
-    # Use parameterized queries to avoid SQL injection
-    cur.execute(f"SELECT COUNT(*) FROM {table} WHERE seq_id = ?", (seq_id,))
-    if cur.fetchone()[0] == 0:
-        # Insert a new row if this patient is not in the database
-        cur.execute(f"""
-            INSERT INTO {table} (seq_id, anon_id, data_dir)
-            VALUES (?, ?, ?)
-        """, (seq_id, anon_id, str(pat_dir)))
-        logger.info(f"Inserted new patient info in database for patient {seq_id}.")
-    else:
-        # Update existing row for this patient
-        cur.execute(f"""
-            UPDATE {table}
-            SET anon_id = ?, data_dir = ?
-            WHERE seq_id = ?
-        """, (anon_id, str(pat_dir), seq_id))
-        logger.info(f"\tUpdated patient info in database for patient {seq_id}.")
-    conn.commit()
-    
-
-def find_t2_tra_kspace_files(patient_kspace_directory: Path, logger: logging.Logger, verbose: bool = False) -> List[Path]:
-    """Finds and returns T2-weighted transverse k-space .dat files in a specified directory.
-
-    Args:
-        patient_kspace_directory (Path): The directory containing k-space .dat files.
-        logger (logging.Logger): The logger for logging messages.
-        verbose (bool, optional): Whether to print verbose log messages. Defaults to False.
-
-    Returns:
-        List[Path]: A list of unique k-space .dat files as Path objects.
-    """
-    search_patterns = [
-        'meas_MID*_T2_TSE_tra*.dat',
-        'meas_MID*_t2_tse_tra*.dat'
-    ]
-
-    unique_file_paths = set()
-    for pattern in search_patterns:
-        search_path = str(patient_kspace_directory / pattern)
-        unique_file_paths.update(glob.glob(search_path))
-
-    if not unique_file_paths:
-        logger.warning(f"Could not find any .dat files in {patient_kspace_directory}")
-
-    # Convert each unique file path string to a Path object
-    unique_file_paths = {Path(file_path) for file_path in unique_file_paths}
-
-    if verbose:
-        for file_path in unique_file_paths:
-            logger.info(f"Found {file_path}")
-
-    return list(unique_file_paths)
-
-
-def process_mrd_if_needed(
-    cur: sqlite3.Cursor,
-    pat_out_dir: Path,
-    raw_ksp_dir: Path,
-    logger: logging.Logger,
-    mrd_xml: Path,
-    mrd_xsl: Path,
-    tablename: str  # New parameter for the table name
-) -> None:
-    """
-    Perform .dat to .mrd anonymization if not done already.
-
-    Parameters:
-    cur: SQLite cursor object.
-    pat_out_dir: Path object for patient output directory.
-    raw_ksp_dir: Path object for raw k-space directory.
-    logger: Logger object for logging messages.
-    mrd_xml: Path object for MRD XML file.
-    mrd_xsl: Path object for MRD XSL file.
-    tablename (str): Name of the table in the database.
-    """
-    cur.execute(f"SELECT has_mrds FROM {tablename} WHERE data_dir = ?", (str(pat_out_dir),))
-    has_mrd = cur.fetchone()[0]
-
-    if has_mrd is None or has_mrd == 0:
-        success = anonymize_mrd_files(pat_out_dir, raw_ksp_dir, logger, mrd_xml, mrd_xsl)  # Implement this function
-
-        if success:
-            cur.execute(f"""
-                UPDATE {tablename}
-                SET has_mrds = 1
-                WHERE data_dir = ?
-            """, (str(pat_out_dir),))
-
-            
-            
-def write_pat_info_to_file(patients, logger, out_dir):
-    """	
-    Write patient info to a csv file.
-    """
-    df = pd.DataFrame(columns=['seq_id', 'id', 'anon_id', 'data_dir'])
-    new_rows = []
-
-    for seq_id, anon_id, pat_dir in patients:
-        id = decipher(anon_id, key=KEY)
-        
-        new_row = pd.DataFrame({
-            'seq_id': [seq_id],
-            'id': [id],
-            'anon_id': [anon_id],
-            'data_dir': [pat_dir]
-        })
-        new_rows.append(new_row)
-        
-    df = pd.concat([df] + new_rows, ignore_index=True)
-    
-    df['seq_id'] = "'" + df['seq_id'].astype(str)
-    df['id'] = "'" + df['id'].astype(str)
-    df['anon_id'] = "'" + df['anon_id'].astype(str)
-    df['data_dir'] = "'" + df['data_dir'].astype(str)
-    
-    dirname = out_dir / 'mappings'
-    df.to_csv(dirname / 'patient_info.csv', index=False, sep=';')
-    logger.info(f"Saved patient info to {dirname / 'patient_info.csv'}")
 
 
 def copy_nifti_files_if_needed(
@@ -437,64 +290,6 @@ def copy_anonymized_dicoms_if_needed(
         logger.warning(f"Patient {anon_id} has no DICOM directories, this should be investigated.")
 
 
-def convert_mrd_to_array(
-    fpath_mrd: str,
-    pat_rec_dir: str,
-    max_mag_ref: float,
-    do_rm_zero_pad: bool,
-    do_norm_to_ref: bool,
-    max_phase_crop: int = None,
-    logger: logging.Logger = None
-) -> None:
-    '''
-        This function converts a .mrd file to a numpy array.
-        The kspace is cropped in the phase direction to the shape of the NYU dataset.
-        The kspace is normalized to the reference magnitude of the NYU dataset.
-    Parameters:
-        fpath (str): The path to the .mrd file.
-        phase_crop_shape (tuple): The shape to crop the kspace to.
-        max_mag_ref (float): The reference magnitude.
-        do_rm_zero_pad (bool): If True, the zero padding is removed.
-        do_norm_to_ref (bool): If True, the magnitude is normalized to the reference magnitude.
-    Returns:
-        kspace (np.ndarray): The kspace array.
-        trans_hdrs (dict): The transformed headers.
-    '''
-    
-    # Construct the kspace array from the sequentail MRD object.
-    kspace = build_kspace_array_from_mrd_umcg(fpath_mrd, logger)
-
-    # Reorder the slices of the kspace based on even and odd number of slices
-    kspace = reorder_k_space_even_odd(kspace, logger)
-
-    # Remove the zero padding from the kspace.
-    if do_rm_zero_pad:
-        kspace = remove_zero_padding(kspace, logger)
-
-    if max_phase_crop == None:
-        max_phase_crop = kspace.shape[-1]
-
-    # Crop the kspace in the phase dir and obtain the transformed headers. Simply extracts the headers as is, if the crop shape is equal to the kspace shape.
-    kspace, trans_hdrs = crop_kspace_in_phase_direction(kspace, max_phase_crop, fpath_mrd, logger)
-
-    if do_norm_to_ref:
-        try:
-            kspace = normalize_to_reference(kspace, max_mag_ref, logger)
-        except Exception as e:
-            logger.error(f"Error in normalizing kspace: {e}")
-            raise Exception(f"Error in normalizing kspace: {e}")
-
-    safe_rss_to_nifti_file(kspace=kspace, fname_part="pre_processed_ksp", do_round=True, dir=pat_rec_dir, logger=logger)
-
-    return kspace, trans_hdrs
-
-
-def format_date(date_string: str):
-    date_object = datetime.strptime(date_string, "%Y%m%d")
-    formatted_date = date_object.strftime("%Y-%m-%d")
-    return formatted_date
-
-
 def extract_t2_tra_metadata(
     pat_dir: Path,
     study_date: str,
@@ -573,130 +368,6 @@ def extract_t2_tra_metadata(
         logger.info(f"\tExtracted DICOM metadata: {info_dict}")
 
     return info_dict
-
-                
-def convert_mrd_to_h5(
-    pat_dir: Path,
-    study_date: str,
-    logger: logging.Logger,
-    cur: sqlite3.Cursor,
-    conn: sqlite3.Connection, 
-    tablename: str = 'kspace_dset_info'
-) -> None:
-    """
-    Converts MRD files to H5 format if not already done.
-    Skips conversion if 'has_h5' is already set for the patient.
-    """
-    seq_id, anon_id = pat_dir.name.split('_')
-
-    # Check if conversion is already done
-    cur.execute(f"SELECT has_h5 FROM {tablename} WHERE seq_id = ?", (seq_id,))
-    if cur.fetchone()[0]:
-        logger.info(f"\tConversion already done for patient {seq_id}. Skipping.")
-        return
-
-    logger.info(f"\tConverting .mrd files to .h5 files for patient in {pat_dir}")
-    perform_conversion(pat_dir, study_date, logger, cur, conn, tablename, seq_id, anon_id)
-    
-    
-def perform_conversion(pat_dir,
-    study_date: str,
-    logger: logging.Logger,
-    cur: sqlite3.Cursor,
-    conn: sqlite3.Connection,
-    tablename: str,
-    seq_id: str,
-    anon_id: str
-) -> None:
-    """
-    Performs the actual conversion of MRD files to H5 format.
-    
-    Parameters:
-    pat_dir (Path): Directory of the patient's data.
-    study_date (str): Date of the study.
-    logger (logging.Logger): Logger for error messages.
-    cur (sqlite3.Cursor): Cursor object for executing SQL queries.
-    conn (sqlite3.Connection): Connection object for connecting to the database.
-    tablename (str): Name of the database table. the kspace patient info table
-    seq_id (str): Sequential ID of the patient.
-    anon_id (str): Anonymized ID of the patient.
-    
-    Raises:
-    Exception: If an error occurs during conversion.
-    """
-    do_rm_zero_pad = True
-    do_norm_to_ref = True
-    max_phase_crop = None
-    
-    mrd_fpath = get_t2_tra_mrd_fname((pat_dir / 'mrds'), logger)
-    fpath_hf = Path(pat_dir / 'h5s', f"{mrd_fpath.stem}.h5")
-    create_h5_if_not_exists(fpath_hf, logger)
-    
-    # Add the K-space to the H5 file.
-    with h5py.File(fpath_hf, 'r+') as hf:
-        if not has_key_in_h5(fpath_hf, 'kspace', logger):
-            kspace, headers = convert_mrd_to_array(
-                fpath_mrd        = mrd_fpath,
-                pat_rec_dir      = pat_dir / 'recons',
-                max_mag_ref      = 0.010586672,  # Entire NYU test and validation dataset # one patient: 0.006096669
-                do_rm_zero_pad   = do_rm_zero_pad, 
-                do_norm_to_ref   = do_norm_to_ref,
-                max_phase_crop   = max_phase_crop,         # None means that the kspace is not cropped in the phase dir.
-                logger           = logger,
-            )
-            
-            hf.create_dataset('ismrmrd_header', data=headers)
-            hf.create_dataset('kspace', data=kspace)
-            logger.info(f"\tCreated 'kspace' dataset and 'ismrmrd_header' in {fpath_hf}")
-
-        if not has_correct_shape(fpath_hf, logger):
-            logger.error(f"kspace shape is not correct. Shape: {hf['kspace'].shape}")
-            raise Exception(f"kspace shape is not correct. Shape: {hf['kspace'].shape}")
-
-    # Read the first file in the pat_dcm_dir to get the dcm headers. 
-    dcm_hdrs = extract_t2_tra_metadata(pat_dir, study_date, logger, cur)
-    
-    # Add the attributes to the H5 file.
-    with h5py.File(fpath_hf, 'r+') as hf:
-        if len(dict(hf.attrs)) == 0:
-            hf.attrs['acquisition']    = 'AXT2'
-            hf.attrs['max']            = 0.0004        # Chosen as the mean/median value from the NYU dataset.
-            hf.attrs['norm']           = 0.12          # Chosen as the mean/almost_median value from the NYU dataset.
-            hf.attrs['patient_id']     = anon_id
-            hf.attrs['patient_id_seq'] = seq_id
-            hf.attrs['do_rm_zero_pad'] = do_rm_zero_pad
-            hf.attrs['do_norm_to_ref'] = do_norm_to_ref
-            hf.attrs['max_phase_crop'] = 'None' if max_phase_crop is None else str(max_phase_crop)
-            for key in dcm_hdrs.keys():
-                hf.attrs[key + "_dcm_hdr"] = dcm_hdrs[key]
-            logger.info(f"\tAdded attributes to h5")
-    
-    # Log the attributes of the H5 file.
-    with h5py.File(fpath_hf, 'r') as hf:
-        for key in dict(hf.attrs).keys():
-            logger.info(f"\t\t{key}: {hf.attrs[key]}")
-
-    # Update the database at the end
-    if conn and cur:
-        cur.execute(f"UPDATE {tablename} SET has_h5 = 1 WHERE seq_id = ?", (seq_id,))
-        conn.commit()
-        logger.info(f"\tUpdated {tablename} for patient {seq_id} to indicate successful H5 conversion.")
-
-
-def check_mri_date_exists(cur: sqlite3.Cursor, seq_id: str, tablename: str = 'kspace_dset_info') -> bool:
-    """
-    Check if the MRI date for a specific patient scan is already set in the database.
-
-    Parameters:
-    cur (sqlite3.Cursor): Database cursor.
-    seq_id (str): The sequence ID of the patient.
-
-    Returns:
-    bool: True if the MRI date exists and is not null, False otherwise.
-    """
-    cur.execute(f"SELECT mri_date FROM {tablename} WHERE seq_id = ?", (seq_id,))
-    result = cur.fetchone()
-    return result is not None and result[0] is not None
 
 
 def get_study_date_matching_kspace_date(
@@ -831,6 +502,21 @@ def transfer_pat_data_to_habrok(
     
 
 def main():
+    """
+    MOUNTING AN EXTERNAL DRIVE ON WSL:
+        This code reads from an external hard-drive (SSD) because we are dealing with a lot of data.
+        In fact even from SSD (D) to another SSD (E)
+        I use WSL on windows and it might not recongnize the SSDs as mounted drives.
+        If you want to make sure that the mounted drive can be found:
+        - Open the WSL terminal
+        - Type 'cd /mnt'
+        - Type 'ls'
+        - You should see the mounted drives there.
+        - if it doesnt exist, you can make the drive letter available by typing 'mkdir /mnt/e' for example.
+        - Then the letter can be assigned to the drive that is inserted into the computer like:
+        - 'sudo mount -t drvfs E: /mnt/e'
+    """
+    
     args = parse_args(verbose=True)
     
     paths = {
@@ -907,6 +593,7 @@ def main():
             transfer_pat_data_to_habrok(anon_id, pat_dir, logger, cur, conn)
 
     conn.close()
+
 
 #########################################################################
 if __name__ == "__main__":

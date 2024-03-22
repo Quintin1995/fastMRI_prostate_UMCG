@@ -4,53 +4,6 @@ import numpy as np
 import logging
 
 
-def crop_kspace_in_phase_direction(
-        kspace: np.ndarray,
-        max_phase_crop: int,
-        fpath_mrd: str,
-        logger: logging.Logger = None
-) -> np.ndarray:
-    """
-    Crop the k-space in the phase direction to achieve the desired target shape.
-    
-    Arguments:
-    - ksp: 5D numpy array of shape (navgs, nslices, ncoils, read, phase) complex.
-    - max_phase: Maximum phase integer value for cropping. in the phase direction
-    - fpath_mrd: Path to the .mrd file. This is needed to change the headers.
-    - verbose: Print the cropping details.
-
-    Returns:
-    - Cropped k-space numpy array.
-    """
-    
-    # Check input shape validity
-    if len(kspace.shape) != 5:
-        raise ValueError("ksp must be 5D (navgs, nslices, ncoils, read, phase) complex.")
-    if kspace.shape[-1] < max_phase_crop:
-        raise ValueError("The k-space phase dimension should be smaller than the desired phase crop.")
-    
-    # the headers of the kspace must be changed if you do a phase cropping. This is read from the MRD file.
-    new_hdrs = change_headers_based_on_phase_cropping(fpath_mrd, max_phase_int=max_phase_crop)
-    
-    if kspace.shape[-1] == max_phase_crop:
-        logger.info("\tKspace and desired phase shape are equal so return kspace as is.")
-        return kspace, new_hdrs
-
-    # Calculate the cropping size in the phase direction
-    phase_crop_size = kspace.shape[-1] - max_phase_crop
-    left_crop       = phase_crop_size // 2
-    right_crop      = phase_crop_size - left_crop
-
-    if logger:
-        logger.info(f"Original k-space shape: {kspace.shape}")
-        cur_shape = list(kspace.shape)
-        cur_shape[-1] -= phase_crop_size
-        logger.info(f"Cropped kspace will be: {tuple(cur_shape)}")
-
-    # Return the cropped k-space and the new headers
-    return kspace[..., left_crop:-right_crop], new_hdrs
-
-
 def remove_zero_padding(kspace: np.ndarray, logger: logging.Logger = None) -> np.ndarray:
     """
     Remove the zero padding in the phase encoding direction from the given k-space.
@@ -171,7 +124,6 @@ def normalize_kspace(kspace_data: np.ndarray) -> np.ndarray:
     del normalized_magnitude, wrapped_phase
     
     return normalized_kspace
-
 
 
 def analyze_kspace_3d_vol(ksp: np.ndarray, label="") -> None:

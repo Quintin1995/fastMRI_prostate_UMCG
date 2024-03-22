@@ -9,9 +9,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pydicom import dcmread
 
-
-KEY = '7531598426'
-
+from assets.cipher import encipher, decipher
 
 def format_date(date_string: str):
     date_object = datetime.strptime(date_string, "%Y%m%d")
@@ -216,59 +214,6 @@ def get_mapping_patient_ids(workdir, key: str, verbose=False) -> List[Dict[str, 
             print("")
 
     return pat_dicts
-
-
-# def decipher(anon_id: str, key: str):
-#     '''
-#     Description:
-#         Deciphers the anonymized patient id to the unanonymized patient id
-#     Arguments:
-#         - anon_id: anonymized patient id
-#         - key: key to use for deciphering
-#     Returns:
-#         - unanon_pat_id: unanonymized patient id
-#     '''
-
-#     output = []
-#     non_digit_char_count = 0
-
-#     for c_idx, char in enumerate(anon_id[4:]):
-#         if not str.isdigit(char):
-#             output.append(char)
-#             non_digit_char_count += 1
-#             continue
-#         key_idx = c_idx - non_digit_char_count
-#         k = int(key[key_idx])
-#         out_char = (int(char) - k) % 10
-#         output.append(str(out_char))
-    
-#     return ''.join(output)
-
-
-# def encipher(patient_id: str, key: str):
-#     '''
-#     Description:
-#         Enciphers the patient id to the anonymized patient id
-#     Arguments:
-#         - patient_id: patient id
-#         - key: key to use for enciphering
-#     Returns:
-#         - anon_pat_id: anonymized patient id
-#     '''
-#     output = []
-#     non_digit_char_count = 0
-
-#     for c_idx, char in enumerate(patient_id):
-#         if not str.isdigit(char):
-#             output.append(char)
-#             non_digit_char_count += 1
-#             continue
-#         key_idx = c_idx - non_digit_char_count
-#         k = int(key[key_idx])
-#         out_char = (int(char) + k) % 10
-#         output.append(str(out_char))
-    
-#     return f"ANON{''.join(output)}"
 
 
 def dt_str():

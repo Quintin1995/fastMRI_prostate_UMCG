@@ -2,15 +2,18 @@ import argparse
 import logging
 from pathlib import Path
 import sqlite3
-from typing import Tuple, Dict
+from typing import Tuple, List
 import subprocess
 import pydicom
+import yaml
+import shutil
 
-from assets.util import KEY, create_directory_structure, setup_logger, format_date
+from assets.util import create_directory_structure, setup_logger, format_date
 from assets.cipher import encipher
-from assets.operations_sqlite_db import connect_to_database, update_patient_info_in_db, check_mri_date_exists
+from assets.operations_sqlite_db import get_study_date, connect_to_database, update_patient_info_in_db, check_mri_date_exists, transfer_pat_data_to_hpc
 from assets.convert_to_mrd import process_mrd_if_needed
 from assets.convert_to_h5 import convert_mrd_to_h5
+from assets.writers import write_pat_info_to_file
 
 
 def parse_args(verbose: bool = False):
@@ -23,53 +26,13 @@ def parse_args(verbose: bool = False):
     """
     parser = argparse.ArgumentParser(
         description="Make kspace dataset ready for training.")
-
-    # Input directory of the raw data
-    parser.add_argument("-fmri1",
-                        "--fastmri1_ksp_fpath",
-                        type=str,
-                        default="/mnt/d/01_data/01_prostate_raw_kspace_umcg",         # this is the FASTMRI1 drive, EXTERNAL SSD (D:)
-                        help="Path to kspace directory.")
-
-    # Output directory of the processed data
-    parser.add_argument("-fmri2",
-                        "--fastmri2_out_fpath",
-                        type=str,
-                        default="/mnt/e/kspace/02_umcg_pst_ksps_processed",     # this is the FASTMRI2 drive, external SSD  (E:)
-                        help="Path to target data directory.")
     
-    # Root dir of the UMCG library
-    parser.add_argument("-umcglib",
-                        "--umcglib_dir",
+    # Path to the config file to run the program
+    parser.add_argument("-cfg",
+                        "--config_fpath",
                         type=str,
-                        default="/mnt/c/users/lohuizenqy/local_docs/repos/umcglib",     # this is the FASTMRI2 drive, external SSD  (E:)
-                        help="Path to umcglib directory.")
-    
-    # Anonymized dicoms directory (processed by the Datamanager C# program)
-    parser.add_argument("-dd",
-                        "--anon_dcms_dir",
-                        type=str,
-                        default="/mnt/e/kspace/02_umcg_pst_ksps_processed/data/sectra_dynacad_exp_dcms_and_rois_pat1_136_anon_dcms",
-                        help="Path to anonymized dicoms directory. Processed by the Datamanager C# program.")
-    
-    # Nifti directory of the dicoms and rois by the Datamanager C# program
-    parser.add_argument("-nd",
-                        "--nifti_dir",
-                        type=str,
-                        default="/mnt/e/kspace/02_umcg_pst_ksps_processed/data/sectra_dynacad_exp_dcms_and_rois_pat1_136_niftis",
-                        help="Path to nifti directory. Processed by the Datamanager C# program.")
-
-
-    parser.add_argument("-th",
-                        "--transfer",
-                        action="store_true",
-                        default = True,
-                        help="Debug mode.")
-
-
-    parser.add_argument("--debug",
-                        action="store_true",
-                        help="Debug mode.")
+                        default="configs/config.yaml",         # this is the FASTMRI1 drive, EXTERNAL SSD (D:)
+                        help="Path to the config file.")
     
     a = parser.parse_args()
 
@@ -89,20 +52,40 @@ def filter_and_sort_patient_dirs(target_dir: Path) -> list:
     return dirs
 
 
-def create_and_log_patient_dirs(kspace_dir: Path, out_dir: Path, debug: bool, logger: logging.Logger) -> None:
+def create_and_log_patient_dirs(
+    ksp_dir: Path,
+    out_dir: Path,
+    logger: logging.Logger = None,
+    debug=False,
+    key=None,
+    seq_id_filter: List[str] = None,
+    **kwargs,
+) -> None:
     """
     Process patient directories to create the required directory structure and
         log relevant information.
     Parameters:
-    - kspace_dir (Path): The directory containing the k-space data.
+    - dataset_drive_locs (List[Path]): List of paths to the dataset directories.
     - out_dir (Path): The directory where the processed data will be stored.
-    - debug (bool): Flag for debugging. If True, the loop breaks after 2 iterations.
     - logger (logging.Logger): Logger object for logging information.
+    - debug (bool): Flag for debugging. If True, the loop breaks after 2 iterations.
+    - key (str): Key for enciphering patient number.
+    - seq_id_filter (List[str]): List of sequence IDs to filter the patients.
     """
-    pat_dirs = filter_and_sort_patient_dirs(kspace_dir)
+    
+    assert key is not None, "Key for enciphering patient number is not provided."
+    
+    pat_dirs = filter_and_sort_patient_dirs(ksp_dir)
+    print(pat_dirs[0])
 
     for pat_idx, pat_dir in enumerate(pat_dirs, start=1):
-        pat_dir_path = kspace_dir / pat_dir
+        seq_id = pat_dir.split('_')[0]
+        
+        if seq_id not in seq_id_filter:
+            print(f"Skipping patient {seq_id} because it is not in the filter list.")
+            continue
+        
+        pat_dir_path = ksp_dir / pat_dir
         dicom_dir_path = pat_dir_path / 'dicoms'
 
         assert len([f.name for f in dicom_dir_path.iterdir() if f.is_dir()]) == 1, \
@@ -110,8 +93,7 @@ def create_and_log_patient_dirs(kspace_dir: Path, out_dir: Path, debug: bool, lo
 
         pat_dcm_dir = [f for f in dicom_dir_path.iterdir() if f.is_dir()][0]
         pat_num = pat_dcm_dir.name.split('_')[-1]
-        anon_pat_id = encipher(pat_num, key=KEY)  # Assuming encipher is defined elsewhere
-        seq_id = str(pat_idx).zfill(4)
+        anon_pat_id = encipher(pat_num, key=key)  # Assuming encipher is defined elsewhere
 
         new_pat_dir_path = out_dir / f"{seq_id}_{anon_pat_id}"
 
@@ -155,27 +137,160 @@ def get_patient_info(target_dir: Path, logger: logging.Logger, verbose: bool = F
     return pat_info
 
 
+# def copy_nifti_files_if_needed(
+#     anon_id: str,
+#     nifti_src_dir: Path,
+#     pat_dir: Path,
+#     cur: sqlite3.Cursor,
+#     conn: sqlite3.Connection,
+#     logger: logging.Logger,
+#     tablename: str = None,
+# ) -> None:
+#     """
+#     Copies NIfTI files from the source directory to the patient's NIfTI directory.
+
+#     Parameters:
+#     anon_id (str): Anonymized patient identifier.
+#     nifti_src_dir (Path): Path to the directory containing the NIfTI files.
+#     pat_dir (Path): Path to the patient's directory where NIfTI files should be copied.
+#     logger (Logger): Logger object for logging the process.
+#     cur (sqlite3.Cursor): Cursor object for executing SQL queries.
+#     conn (sqlite3.Connection): Connection object for connecting to the database.
+#     tablename (str): Name of the database table.
+#     """
+#     assert tablename is not None, "Table name is not provided."
+    
+#     for study_dir in (nifti_src_dir / anon_id).iterdir():
+#         target_study_dir = pat_dir / 'niftis' / study_dir.name
+#         if not target_study_dir.exists():
+#             logger.info(f'Creating directory: {target_study_dir}')
+#             target_study_dir.mkdir(parents=True, exist_ok=True)
+#             for nifti_fpath in study_dir.iterdir():
+#                 if 'ep_' in nifti_fpath.name or 'tse' in nifti_fpath.name or 'roi' in nifti_fpath.name or 'ROI' in nifti_fpath.name:
+#                     cmd = [
+#                         'cp',
+#                         '-r',
+#                         str(nifti_fpath),
+#                         str(target_study_dir)
+#                     ]
+#                     try:
+#                         subprocess.check_call(cmd, stderr=subprocess.STDOUT)
+#                         logger.info(f'SUCCESS: Copied {nifti_fpath} to {target_study_dir}')
+#                     except subprocess.CalledProcessError as e:
+#                         logger.error(f'FAILED to copy {nifti_fpath} to {target_study_dir}: {e}')
+#         else:
+#             logger.info(f'\tStudy directory already exists: {target_study_dir}')
+        
+#     # Check if there are any study directories in the patient's DICOM directory
+#     study_dirs = list((pat_dir / 'niftis').iterdir())
+#     if any(f.is_dir() for f in study_dirs):
+#         try:
+#             # Begin a transaction
+#             conn.execute('BEGIN')
+            
+#             # Update the database to indicate that the niftis have been copied
+#             cur.execute(f"""
+#                 UPDATE {tablename}
+#                 SET has_niftis = 1
+#                 WHERE anon_id = ?
+#             """, (anon_id,))
+            
+#             # Commit the transaction
+#             conn.commit()
+#             logger.info(f"\tDatabase updated for patient {anon_id} to indicate niftis have been copied.")
+#         except sqlite3.Error as e:
+#             # Rollback the transaction on error
+#             conn.rollback()
+#             logger.error(f"Failed to update database for patient {anon_id}: {e}")
+#     else:
+#         logger.warning(f"Patient {anon_id} has no nifti directories, this should be investigated.")
+
+
+# def copy_nifti_files_if_needed(
+#     anon_id: str,
+#     nifti_src_dir: Path,
+#     pat_dir: Path,
+#     conn: sqlite3.Connection,
+#     logger: logging.Logger,
+#     tablename: str = None,
+# ) -> None:
+#     """
+#     Copies NIfTI files from the source directory to the patient's NIfTI directory.
+
+#     Parameters:
+#     anon_id (str): Anonymized patient identifier.
+#     nifti_src_dir (Path): Path to the directory containing the NIfTI files.
+#     pat_dir (Path): Path to the patient's directory where NIfTI files should be copied.
+#     logger (Logger): Logger object for logging the process.
+#     conn (sqlite3.Connection): Connection object for connecting to the database.
+#     tablename (str): Name of the database table.
+#     """
+#     assert tablename is not None, "Table name is not provided."
+    
+#     copied = False
+#     already_copied = False
+#     input(f"pressen enter to continue")
+#     for study_dir in (nifti_src_dir / anon_id).iterdir():
+#         target_study_dir = pat_dir / 'niftis' / study_dir.name
+#         if not target_study_dir.exists():
+#             logger.info(f'Creating directory: {target_study_dir}')
+#             target_study_dir.mkdir(parents=True, exist_ok=True)
+#             for nifti_fpath in study_dir.iterdir():
+#                 if 'ep_' in nifti_fpath.name or 'tse' in nifti_fpath.name or 'roi' in nifti_fpath.name or 'ROI' in nifti_fpath.name:
+#                     try:
+#                         shutil.copy(nifti_fpath, target_study_dir)
+#                         logger.info(f'SUCCESS: Copied {nifti_fpath} to {target_study_dir}')
+#                         copied = True
+#                     except Exception as e:
+#                         logger.error(f'FAILED to copy {nifti_fpath} to {target_study_dir}: {e}')
+#         else:
+#             already_copied = True
+#             logger.info(f'Study directory already exists: {target_study_dir}')
+    
+#     input(f"pressen enter to continue")
+    
+#     if copied:
+#         try:
+#             with conn:
+#                 conn.execute(f"""
+#                     UPDATE {tablename}
+#                     SET has_niftis = 1
+#                     WHERE anon_id = ?
+#                 """, (anon_id,))
+#                 logger.info(f"Database updated for patient {anon_id} to indicate niftis have been copied.")
+#         except sqlite3.Error as e:
+#             logger.error(f"Failed to update database for patient {anon_id}: {e}")
+#     else:
+#         if already_copied:
+#             logger.info(f"Nifti directories already copied for patient {anon_id}.")
+#         else:
+#             logger.warning(f"No nifti directories copied for patient {anon_id}. This should be investigated.")
+
+
 def copy_nifti_files_if_needed(
     anon_id: str,
     nifti_src_dir: Path,
     pat_dir: Path,
-    logger: logging.Logger,
-    cur: sqlite3.Cursor,
     conn: sqlite3.Connection,
-    tablename: str = 'kspace_dset_info'
+    logger: logging.Logger,
+    tablename: str = None,
 ) -> None:
     """
-    Copies NIfTI files from the source directory to the patient's NIfTI directory.
+    Copies NIfTI files from the source directory to the patient's NIfTI directory using the cp command.
 
     Parameters:
     anon_id (str): Anonymized patient identifier.
     nifti_src_dir (Path): Path to the directory containing the NIfTI files.
     pat_dir (Path): Path to the patient's directory where NIfTI files should be copied.
     logger (Logger): Logger object for logging the process.
-    cur (sqlite3.Cursor): Cursor object for executing SQL queries.
     conn (sqlite3.Connection): Connection object for connecting to the database.
     tablename (str): Name of the database table.
     """
+    assert tablename is not None, "Table name is not provided."
+    
+    copied = False
+    already_copied = False
+
     for study_dir in (nifti_src_dir / anon_id).iterdir():
         target_study_dir = pat_dir / 'niftis' / study_dir.name
         if not target_study_dir.exists():
@@ -183,66 +298,128 @@ def copy_nifti_files_if_needed(
             target_study_dir.mkdir(parents=True, exist_ok=True)
             for nifti_fpath in study_dir.iterdir():
                 if 'ep_' in nifti_fpath.name or 'tse' in nifti_fpath.name or 'roi' in nifti_fpath.name or 'ROI' in nifti_fpath.name:
-                    cmd = [
-                        'cp',
-                        '-r',
-                        str(nifti_fpath),
-                        str(target_study_dir)
-                    ]
+                    cmd = ['cp', '-r', str(nifti_fpath), str(target_study_dir)]
                     try:
                         subprocess.check_call(cmd, stderr=subprocess.STDOUT)
-                        logger.info(f'Copied {nifti_fpath} to {target_study_dir}')
+                        logger.info(f'SUCCESS: Copied {nifti_fpath} to {target_study_dir}')
+                        copied = True
                     except subprocess.CalledProcessError as e:
-                        logger.error(f'Failed to copy {nifti_fpath} to {target_study_dir}: {e}')
+                        logger.error(f'FAILED to copy {nifti_fpath} to {target_study_dir}: {e}')
         else:
-            logger.info(f'\tStudy directory already exists: {target_study_dir}')
-        
-    # Check if there are any study directories in the patient's DICOM directory
-    study_dirs = list((pat_dir / 'niftis').iterdir())
-    if any(f.is_dir() for f in study_dirs):
+            already_copied = True
+            logger.info(f'Study directory already exists: {target_study_dir}')
+
+    if copied:
         try:
-            # Begin a transaction
-            conn.execute('BEGIN')
-            
-            # Update the database to indicate that the niftis have been copied
-            cur.execute(f"""
-                UPDATE {tablename}
-                SET has_niftis = 1
-                WHERE anon_id = ?
-            """, (anon_id,))
-            
-            # Commit the transaction
-            conn.commit()
-            logger.info(f"\tDatabase updated for patient {anon_id} to indicate niftis have been copied.")
+            with conn:
+                conn.execute(f"""
+                    UPDATE {tablename}
+                    SET has_niftis = 1
+                    WHERE anon_id = ?
+                """, (anon_id,))
+                logger.info(f"Database updated for patient {anon_id} to indicate niftis have been copied.")
         except sqlite3.Error as e:
-            # Rollback the transaction on error
-            conn.rollback()
             logger.error(f"Failed to update database for patient {anon_id}: {e}")
     else:
-        logger.warning(f"Patient {anon_id} has no nifti directories, this should be investigated.")
+        if already_copied:
+            logger.info(f"Nifti directories already copied for patient {anon_id}.")
+        else:
+            logger.warning(f"No nifti directories copied for patient {anon_id}. This should be investigated.")
+
+
+# def copy_anonymized_dicoms_if_needed(
+#     anon_id: str,
+#     anon_dcms_dir: Path,
+#     pat_dir: Path,
+#     cur: sqlite3.Cursor,
+#     conn: sqlite3.Connection,
+#     tablename: str,
+#     logger: logging.Logger,
+# ) -> None:
+#     """
+#     Copies DICOM files from the anonymized DICOMs directory to the patient's DICOM directory.
+#     And updates the database to indicate that the DICOMs have been copied.
+    
+#     Parameters:
+#     anon_id (str): Anonymized patient identifier.
+#     anon_dcms_dir (Path): Path to the directory containing the anonymized DICOMs.
+#     pat_dir (Path): Path to the patient's directory where DICOMs should be copied.
+#     logger (Logger): Logger object for logging the process.
+#     cur (sqlite3.Cursor): Cursor object for executing SQL queries.
+#     conn (sqlite3.Connection): Connection object for connecting to the database.
+#     """
+#     for study_dir in (anon_dcms_dir / anon_id).iterdir():
+#         target_study_dir = pat_dir / 'dicoms' / study_dir.name
+#         if not target_study_dir.exists():
+#             logger.info(f'Creating directory: {target_study_dir}')
+#             target_study_dir.mkdir(parents=True, exist_ok=True)
+#             for seq_dir in study_dir.iterdir():
+#                 if 'ep_' in seq_dir.name or 'tse' in seq_dir.name:
+#                     cmd = [
+#                         'cp',
+#                         '-r',
+#                         str(seq_dir),
+#                         str(target_study_dir)
+#                     ]
+#                     try:
+#                         subprocess.check_call(cmd, stderr=subprocess.STDOUT)
+#                         logger.info(f'SUCESS: Copied {seq_dir} to {target_study_dir}')
+#                     except subprocess.CalledProcessError as e:
+#                         logger.error(f'Failed to copy {seq_dir} to {target_study_dir}: {e}')
+#         else:
+#             logger.info(f'\tStudy directory already exists: {target_study_dir}')
+#             # Optionally, log more details or handle existing directory case
+    
+#     # Check if there are any study directories in the patient's DICOM directory
+#     study_dirs = list((pat_dir / 'dicoms').iterdir())
+#     if any(f.is_dir() for f in study_dirs):
+#         try:
+#             # Begin a transaction
+#             conn.execute('BEGIN')
+            
+#             # Update the database to indicate that the DICOMs have been copied
+#             cur.execute(f"""
+#                 UPDATE {tablename}
+#                 SET has_all_dicoms = 1
+#                 WHERE anon_id = ?
+#             """, (anon_id,))
+            
+#             # Commit the transaction
+#             conn.commit()
+#             logger.info(f"\tDatabase updated for patient {anon_id} to indicate DICOMs have been copied.")
+#         except sqlite3.Error as e:
+#             # Rollback the transaction on error
+#             conn.rollback()
+#             logger.error(f"Failed to update database for patient {anon_id}: {e}")
+#     else:
+#         logger.warning(f"Patient {anon_id} has no DICOM directories, this should be investigated.")
 
 
 def copy_anonymized_dicoms_if_needed(
     anon_id: str,
     anon_dcms_dir: Path,
     pat_dir: Path,
-    logger: logging.Logger,
-    cur: sqlite3.Cursor,
     conn: sqlite3.Connection,
-    tablename: str = 'kspace_dset_info'
+    tablename: str,
+    logger: logging.Logger,
 ) -> None:
     """
-    Copies DICOM files from the anonymized DICOMs directory to the patient's DICOM directory.
+    Copies DICOM files from the anonymized DICOMs directory to the patient's DICOM directory using the cp command.
     And updates the database to indicate that the DICOMs have been copied.
-    
+
     Parameters:
     anon_id (str): Anonymized patient identifier.
     anon_dcms_dir (Path): Path to the directory containing the anonymized DICOMs.
     pat_dir (Path): Path to the patient's directory where DICOMs should be copied.
     logger (Logger): Logger object for logging the process.
-    cur (sqlite3.Cursor): Cursor object for executing SQL queries.
     conn (sqlite3.Connection): Connection object for connecting to the database.
+    tablename (str): Name of the table in the database.
     """
+    assert tablename is not None, "Table name is not provided."
+    
+    copied = False
+    already_copied = False
+
     for study_dir in (anon_dcms_dir / anon_id).iterdir():
         target_study_dir = pat_dir / 'dicoms' / study_dir.name
         if not target_study_dir.exists():
@@ -250,153 +427,116 @@ def copy_anonymized_dicoms_if_needed(
             target_study_dir.mkdir(parents=True, exist_ok=True)
             for seq_dir in study_dir.iterdir():
                 if 'ep_' in seq_dir.name or 'tse' in seq_dir.name:
-                    cmd = [
-                        'cp',
-                        '-r',
-                        str(seq_dir),
-                        str(target_study_dir)
-                    ]
+                    cmd = ['cp', '-r', str(seq_dir), str(target_study_dir)]
                     try:
                         subprocess.check_call(cmd, stderr=subprocess.STDOUT)
-                        logger.info(f'Copied {seq_dir} to {target_study_dir}')
+                        logger.info(f'SUCCESS: Copied {seq_dir} to {target_study_dir}')
+                        copied = True
                     except subprocess.CalledProcessError as e:
-                        logger.error(f'Failed to copy {seq_dir} to {target_study_dir}: {e}')
+                        logger.error(f'FAILED to copy {seq_dir} to {target_study_dir}: {e}')
         else:
-            logger.info(f'\tStudy directory already exists: {target_study_dir}')
-            # Optionally, log more details or handle existing directory case
-    
-    # Check if there are any study directories in the patient's DICOM directory
-    study_dirs = list((pat_dir / 'dicoms').iterdir())
-    if any(f.is_dir() for f in study_dirs):
+            already_copied = True
+            logger.info(f'Study directory already exists: {target_study_dir}')
+
+    if copied:
         try:
-            # Begin a transaction
-            conn.execute('BEGIN')
-            
-            # Update the database to indicate that the DICOMs have been copied
-            cur.execute(f"""
-                UPDATE {tablename}
-                SET has_all_dicoms = 1
-                WHERE anon_id = ?
-            """, (anon_id,))
-            
-            # Commit the transaction
-            conn.commit()
-            logger.info(f"\tDatabase updated for patient {anon_id} to indicate DICOMs have been copied.")
+            with conn:
+                conn.execute(f"""
+                    UPDATE {tablename}
+                    SET has_all_dicoms = 1
+                    WHERE anon_id = ?
+                """, (anon_id,))
+                logger.info(f"Database updated for patient {anon_id} to indicate DICOMs have been copied.")
         except sqlite3.Error as e:
-            # Rollback the transaction on error
-            conn.rollback()
             logger.error(f"Failed to update database for patient {anon_id}: {e}")
     else:
-        logger.warning(f"Patient {anon_id} has no DICOM directories, this should be investigated.")
+        if already_copied:
+            logger.info(f"DICOM directories already copied for patient {anon_id}.")
+        else:
+            logger.warning(f"No DICOM directories copied for patient {anon_id}. This should be investigated.")
 
 
-def extract_t2_tra_metadata(
-    pat_dir: Path,
-    study_date: str,
-    logger: logging.Logger = None,
-    cur: sqlite3.Cursor = None,
-    tablename: str = 'dicom_headers_v1'
-) -> Dict:
-    """
-    Extracts metadata from DICOM headers of T2 TRA TSE MRI sequence.
+# def get_study_date_matching_kspace_date(
+#     raw_kspace_rootdir_all_patients: Path,
+#     seq_id: str,
+#     conn: sqlite3.Connection,
+#     logger: logging.Logger,
+#     tablename: str = None
+# ) -> str:
+#     """
+#     Retrieves and updates the study date for a patient based on the sequence ID.
 
-    Parameters:
-    pat_dir (Path): Directory of the patient's data.
-    study_date (str): Date of the study.
-    logger (logging.Logger): Logger for error messages.
-    tablename (str): Name of the database table.
+#     This function searches for the first DICOM file in the patient's directory, extracts the study date, and updates 
+#     the corresponding database record. It returns the study date for further use.
 
-    Returns:
-    Dict: Dictionary containing extracted metadata.
-    """
-    seq_id, anon_id = pat_dir.name.split('_')
-    dicoms_dir = Path(pat_dir / 'dicoms' / study_date)
+#     Parameters:
+#     raw_kspace_rootdir_all_patients (Path): The root directory containing patient k-space data.
+#     seq_id (str): The sequence ID of the patient.
+#     cur (sqlite3.Cursor): Database cursor.
+#     conn (sqlite3.Connection): Database connection.
+#     logger (logging.Logger): Logger for logging the process.
+
+#     Returns:
+#     str: The study date extracted from the DICOM file.
+
+#     Raises:
+#     ValueError: If no DICOM file is found or the study date is not in the DICOM file.
+#     """
+#     assert tablename is not None, "Table name is not provided."
     
-    sd = study_date.replace('-', '')
+#     unanon_dcm_dir = raw_kspace_rootdir_all_patients / f"{seq_id}_patient_umcg_done" / 'dicoms'
+#     study_date = None
     
-    # Execute SQL query
-    query = f"""
-        SELECT NiftiPath FROM {tablename}
-        WHERE patientID LIKE ?
-        AND ProtocolName LIKE "%T2%"
-        AND ProtocolName LIKE "%tra%"
-        AND ProtocolName NOT LIKE "%blade%"
-        AND ProtocolName NOT LIKE "%bekken%"
-       	AND ProtocolName NOT LIKE "%hele buik%"
-        AND NiftiPath NOT NULL
-        AND SeriesDate = {sd}
-        ORDER BY AcquisitionTime DESC
-        LIMIT 1;
-    """
-    cur.execute(query, (f"%{anon_id}%",))
-    result = cur.fetchone()
-    if not result:
-        msg = f"No NIfTI path found for patient {anon_id}."
-        logger.error(msg) if logger else print(msg)
-        raise ValueError(msg)
+#     input(f"press enter to continue... We are in get_study_date_matching_kspace_date() check this function and if statement below it. because we are globbing .IMA files which seems odd.")
+#     for dcm_file in unanon_dcm_dir.glob('**/*.IMA'):
+#         try:
+#             study_date = pydicom.dcmread(dcm_file).StudyDate
+#             if study_date:
+#                 break
+#         except Exception as e:
+#             logger.error(f"Error reading DICOM file {dcm_file}: {e}")
+#             continue
 
-    # Extract file stem from NIfTI path
-    nifti_stem = Path(result[0]).stem
-    nifti_stem = Path(nifti_stem).stem
+#     if study_date:
+#         cur = conn.cursor()
+#         cur.execute(f"UPDATE {tablename} SET mri_date = ? WHERE seq_id = ?", (study_date, seq_id))
+#         conn.commit()
+#         logger.info(f"Updated study date in database for patient {seq_id} to {study_date}.")
+#     else:
+#         error_msg = f"Study date not found for patient {seq_id}"
+#         logger.error(error_msg)
+#         raise ValueError(error_msg)
 
-    # Locate the DICOM file in dicoms_dir
-    dicom_t2_dir = dicoms_dir / nifti_stem
-    
-    try:
-        first_dcm_file = next(dicom_t2_dir.glob('*'))
-    except StopIteration:
-        msg = f"DICOM file not found in {dicom_t2_dir}"
-        logger.error(msg) if logger else print(msg)
-        raise FileNotFoundError(msg)
-
-    # Read the DICOM file and extract metadata
-    ds = pydicom.dcmread(first_dcm_file)
-
-    info_dict = {
-        'percent_phase_fov': ds.PercentPhaseFieldOfView,
-        'n_phase_enc_steps': ds.NumberOfPhaseEncodingSteps,
-        'percent_sampling': ds.PercentSampling,
-        'acq_mat': ds.AcquisitionMatrix,
-        'n_averages': ds.NumberOfAverages,
-        'rows': ds.Rows,
-        'cols': ds.Columns,
-        'pat_pos': ds.PatientPosition,
-        'pixel_spacing': ds.PixelSpacing,
-    }
-    
-    if logger:
-        logger.info(f"\tExtracted DICOM metadata: {info_dict}")
-
-    return info_dict
-
+#     return study_date
 
 def get_study_date_matching_kspace_date(
     raw_kspace_rootdir_all_patients: Path,
     seq_id: str,
-    cur: sqlite3.Cursor,
     conn: sqlite3.Connection,
     logger: logging.Logger,
-    tablename: str = 'kspace_dset_info'
+    tablename: str = None
 ) -> str:
     """
     Retrieves and updates the study date for a patient based on the sequence ID.
-
+    
     This function searches for the first DICOM file in the patient's directory, extracts the study date, and updates 
     the corresponding database record. It returns the study date for further use.
-
+    
     Parameters:
     raw_kspace_rootdir_all_patients (Path): The root directory containing patient k-space data.
     seq_id (str): The sequence ID of the patient.
-    cur (sqlite3.Cursor): Database cursor.
     conn (sqlite3.Connection): Database connection.
     logger (logging.Logger): Logger for logging the process.
-
+    tablename (str): Name of the database table.
+    
     Returns:
     str: The study date extracted from the DICOM file.
-
+    
     Raises:
     ValueError: If no DICOM file is found or the study date is not in the DICOM file.
     """
+    assert tablename is not None, "Table name is not provided."
+    
     unanon_dcm_dir = raw_kspace_rootdir_all_patients / f"{seq_id}_patient_umcg_done" / 'dicoms'
     study_date = None
     
@@ -410,10 +550,13 @@ def get_study_date_matching_kspace_date(
             continue
 
     if study_date:
-        # Update mri date where seq_id 
-        cur.execute(f"UPDATE {tablename} SET mri_date = ? WHERE seq_id = ?", (study_date, seq_id))
-        conn.commit()
-        logger.info(f"Updated study date in database for patient {seq_id} to {study_date}.")
+        try:
+            with conn:
+                conn.execute(f"UPDATE {tablename} SET mri_date = ? WHERE seq_id = ?", (study_date, seq_id))
+                logger.info(f"Updated study date in database for patient {seq_id} to {study_date}.")
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update study date for patient {seq_id}: {e}")
+            raise
     else:
         error_msg = f"Study date not found for patient {seq_id}"
         logger.error(error_msg)
@@ -422,88 +565,28 @@ def get_study_date_matching_kspace_date(
     return study_date
 
 
-def get_study_date(cur: sqlite3.Cursor, tablename: str, seq_id: str) -> str:
-    """
-    Retrieves the study date for a patient based on the sequence ID.
+def load_config():
+    args = parse_args(verbose=True)
+    with open(args.config_fpath, 'r', encoding='UTF-8') as file:
+        cfg = yaml.safe_load(file)
     
-    Parameters:
-    cur (sqlite3.Cursor): Database cursor.
-    tablename (str): Name of the table in the database.
-    seq_id (str): The sequence ID of the patient.
+    keys_to_make_a_path = ['ksp_in_dir', 'out_root', 'mrd_xml', 'mrd_xsl', 'anon_dcms_dir', 'nifti_dir', 'sqlite_db_fpath']
+    for key in keys_to_make_a_path:
+        cfg[key] = Path(cfg[key])
     
-    Returns:
-    str: The study date extracted from the database.
-    """
-    query = f"SELECT mri_date FROM {tablename} WHERE seq_id = ?"
-    study_date = cur.execute(query, (seq_id,)).fetchone()[0]
-    return str(study_date)
+    for k, v in cfg.items():
+        print(f"{k}:\t{v}  \tdtype: {type(v)}")
+    print("")
+    return cfg
 
-    
-def transfer_pat_data_to_habrok(
-    anon_id: str,
-    pat_dir: Path,
-    logger: logging.Logger,
-    cur: sqlite3.Cursor,
-    conn: sqlite3.Connection
-) -> None:
-    """
-    Transfers the specified patient's data to the Habrok server using rsync,
-    excluding the 'mrds' directory. Checks the database to ensure all required
-    data conditions are met before initiating the transfer. Updates the database
-    upon successful transfer.
-
-    Parameters:
-    anon_id (str): Anonymized ID of the patient.
-    pat_dir (Path): Path to the patient's data directory.
-    logger (logging.Logger): Logger for logging messages.
-    cur (sqlite3.Cursor): Database cursor for executing SQL queries.
-    conn (sqlite3.Connection): Database connection object.
-
-    Raises:
-    Exception: If an error occurs during data transfer or database operations.
-    """
-    username    = 'p290820'
-    servername  = 'interactive1.hb.hpc.rug.nl'
-    destination = '/scratch/p290820/datasets/003_umcg_pst_ksps/pat_data_full'
-    habrok_dest = f"{username}@{servername}:{destination}"  
-    exclude_dir = "--exclude=mrds"  # Excludes the 'mrds' directory
-
-    try:
-        # Check if all required data is present
-        cur.execute("""
-            SELECT has_all_dicoms, has_h5, has_niftis
-            FROM kspace_dset_info
-            WHERE anon_id = ?
-        """, (anon_id,))
-        result = cur.fetchone()
-        if result and all(int(field) == 1 for field in result):
-            # Execute rsync command
-            rsync_command = ["rsync", "-avz", exclude_dir, str(pat_dir), habrok_dest]
-            subprocess.run(rsync_command, check=True)
-
-            # Update database upon successful transfer
-            cur.execute("""
-                UPDATE kspace_dset_info
-                SET transfered_to_habrok = 1
-                WHERE anon_id = ?
-            """, (anon_id,))
-            conn.commit()
-
-            logger.info(f"Successfully transferred patient data for {anon_id} to Habrok and updated the database.")
-        else:
-            logger.warning(f"Patient {anon_id} does not have all required data for transfer. Missing fields: {result}")
-
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to transfer patient data for {anon_id}. Error: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"An error occurred while processing patient {anon_id}. Error: {e}")
-        raise
-    
 
 def main():
     """
     MOUNTING AN EXTERNAL DRIVE ON WSL:
+    
+    sudo umount /mnt/d
+    sudo mount -t drvfs D: /mnt/d
+    
         This code reads from an external hard-drive (SSD) because we are dealing with a lot of data.
         In fact even from SSD (D) to another SSD (E)
         I use WSL on windows and it might not recongnize the SSDs as mounted drives.
@@ -516,20 +599,8 @@ def main():
         - Then the letter can be assigned to the drive that is inserted into the computer like:
         - 'sudo mount -t drvfs E: /mnt/e'
     """
-    
-    args = parse_args(verbose=True)
-    
-    paths = {
-        'umcglib_root': Path(args.umcglib_dir),
-        'ksp_in_dir': Path(args.fastmri1_ksp_fpath),
-        'out_dir': Path(args.fastmri2_out_fpath),
-        'anon_dcms_dir': Path(args.anon_dcms_dir),
-        'nifti_dir': Path(args.nifti_dir),
-        'mrd_xml': Path(args.umcglib_dir) / 'src' / 'umcglib' / 'kspace' / 'custom_param_maps' / 'IsmrmrdParameterMap_Siemens_DIAG_UMCG.xml',
-        'mrd_xsl': Path(args.umcglib_dir) / 'src' / 'umcglib' / 'kspace' / 'custom_param_maps' / 'IsmrmrdParameterMap_Siemens_DIAG_UMCG.xsl',
-        'pat_data_dir': Path(args.fastmri2_out_fpath) / 'data' / 'pat_data'
-    }
-    
+    cfg = load_config()
+
     # These patients are excluded for h5 conversion for now for some reason
     exclusion_dict = {
         '0050': 'ANON8824369', # Reason: study date not found in DB. Therefore no nifti path. Also Recidief patient.
@@ -538,19 +609,19 @@ def main():
         '0130': 'ANON9827881', # Reason: Build_kspace_array_from_mrd_umcg() fails. ValueError: could not broadcast input array from shape (20,640) into shape (20,320), also a recidief mention
     }
     
-    logger = setup_logger(paths['out_dir']/'logs', use_time=False)
-    conn   = connect_to_database(paths['out_dir']/'database'/'dbs'/'master_habrok_20231106.db')
-    table  = 'kspace_dset_info'
-    cur    = conn.cursor()
+    logger = setup_logger(cfg['out_root']/'logs', use_time=False)
+    conn   = connect_to_database(cfg['out_root']/cfg['sqlite_db_fpath'])
+    # cur    = conn.cursor()
 
     # Create the dir structure for the processed data
-    create_and_log_patient_dirs(paths['ksp_in_dir'], paths['pat_data_dir'], args.debug, logger)
+    pat_data_dir = cfg['out_root'] / 'data' / 'pat_data'
+    create_and_log_patient_dirs(cfg['ksp_in_dir'], pat_data_dir, logger, **cfg)
 
-    # Update get the patient info and update the database
-    patients = get_patient_info(paths['pat_data_dir'], logger, verbose=False)
+    # Get the patient info and update the database SQlite
+    patients = get_patient_info(pat_data_dir, logger, verbose=False)
     
     if False:       # Temporary to write the patient info to a csv file
-        write_pat_info_to_file(patients, logger, paths['out_dir'])
+        write_pat_info_to_file(patients, logger, cfg['out_dir'], **cfg)
     
     # loop over the patients and update the database with the patient info and anonymize the .dat files
     for pat_idx, (seq_id, anon_id, pat_dir) in enumerate(patients):
@@ -560,22 +631,21 @@ def main():
         if seq_id in exclusion_dict.keys():
             logger.info(f"\t SKIPPING patient {seq_id} because it is in the exclusion list.")
             continue
-        
-        update_patient_info_in_db(cur, conn, table, seq_id, anon_id, pat_dir, logger)
+        update_patient_info_in_db(conn, seq_id, anon_id, pat_dir, logger, cfg['tablename'])
 
         # Convert/Anonymize .dat files to .mrd  if it has not happened already
-        raw_ksp_dir = paths['ksp_in_dir'] / f"{(pat_dir.name).split('_')[0]}_patient_umcg_done" / 'kspaces'
-        process_mrd_if_needed(cur, pat_dir, raw_ksp_dir, logger, paths['mrd_xml'], paths['mrd_xsl'], table)
+        raw_ksp_dir = cfg['ksp_in_dir'] / f"{(pat_dir.name).split('_')[0]}_patient_umcg_done" / 'kspaces'
+        process_mrd_if_needed(conn, pat_dir, raw_ksp_dir, cfg['mrd_xml'], cfg['mrd_xsl'], cfg['tablename'], logger)
 
         # Copy the dicoms and nifti files from the anonymized dicoms and nifti dirs to the patient dicoms dir
-        copy_anonymized_dicoms_if_needed(anon_id, paths['anon_dcms_dir'], pat_dir, logger, cur, conn)
-        copy_nifti_files_if_needed(anon_id, paths['nifti_dir'], pat_dir, logger, cur, conn)
-        
+        copy_anonymized_dicoms_if_needed(anon_id, cfg['anon_dcms_dir'], pat_dir, conn, cfg['tablename'], logger)
+        copy_nifti_files_if_needed(anon_id, cfg['nifti_dir'], pat_dir, conn, logger, cfg['tablename'])
+
         # Check if the MRI date is already set in the database
-        if not check_mri_date_exists(cur, seq_id):
-            study_date = get_study_date_matching_kspace_date(paths['ksp_in_dir'], seq_id, cur, conn, logger)
+        if not check_mri_date_exists(conn, seq_id, cfg['tablename']):
+            study_date = get_study_date_matching_kspace_date(cfg['ksp_in_dir'], seq_id, conn, logger, cfg['tablename'])
         else:
-            study_date = get_study_date(cur, table, seq_id)
+            study_date = get_study_date(conn, seq_id, cfg['tablename'])
             logger.info(f"\tMRI date for patient {seq_id} already exists in database.")
         study_date = format_date(study_date)
         
@@ -584,13 +654,13 @@ def main():
             pat_dir        = Path(pat_dir),
             study_date     = study_date,
             logger         = logger,
-            cur            = cur,
             conn           = conn,
+            **cfg
         )
         
         # Transfer all relevant files to Habrok
-        if args.transfer:
-            transfer_pat_data_to_habrok(anon_id, pat_dir, logger, cur, conn)
+        if cfg['transfer_to_hpc']:
+            transfer_pat_data_to_hpc(anon_id, pat_dir, logger, conn, **cfg)
 
     conn.close()
 

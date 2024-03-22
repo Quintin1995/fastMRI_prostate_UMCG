@@ -1,20 +1,26 @@
 import os
 import SimpleITK as sitk
-from assests.utils import dt_str
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
+import pandas as pd
+
+from assets.util import dt_str
+from assets.util import decipher
 
 
-def write_pat_info_to_file(patients, logger, out_dir):
+def write_pat_info_to_file(patients, logger, out_dir, key: str=None):
     """	
     Write patient info to a csv file.
     """
+    
+    assert key is not None, "key must be provided to decipher the anon_id"
+    
     df = pd.DataFrame(columns=['seq_id', 'id', 'anon_id', 'data_dir'])
     new_rows = []
 
     for seq_id, anon_id, pat_dir in patients:
-        id = decipher(anon_id, key=KEY)
+        id = decipher(anon_id, key=key)
         
         new_row = pd.DataFrame({
             'seq_id': [seq_id],

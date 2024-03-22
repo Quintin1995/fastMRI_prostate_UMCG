@@ -1,42 +1,14 @@
 import sqlite3
 import logging
-from pathlib import Path
 import subprocess
 import h5py
 import xml.etree.ElementTree as ET
+import numpy as np
+from pathlib import Path
+import ismrmrd
+
 from assets.util import print_element, find_t2_tra_kspace_files, print_headers
 from assets.util import convert_dict_to_xml, pretty_print_xml
-
-
-def change_headers_based_on_phase_cropping(fpath_mrd: str, max_phase_int: int) -> bytes:
-    """
-    Adjust the headers of an .mrd file to match the NYU format based on phase cropping.
-
-    Parameters:
-    - fpath_mrd: Path to the .mrd file.
-    - max_phase_int: Maximum phase integer value for cropping.
-
-    Returns:
-    - header_bytes: Transformed headers in byte format.
-    """
-
-    # Namespace string for ISMRMRD XML
-    ns = "{http://www.ismrm.org/ISMRMRD}"
-
-    # Retrieve the headers from the .mrd file
-    umcg_headers_mrd = get_headers_from_ismrmrd(fpath_mrd, verbose=False)
-
-    # Convert the headers to a dictionary
-    umcg_headers_dict = convert_ismrmrd_headers_to_dict(umcg_headers_mrd)
-
-    # Update headers with the correct matrix size and encoding limits for NYU data format
-    umcg_headers_dict[f"{ns}ismrmrdHeader"][f"{ns}encoding"][f"{ns}encodedSpace"][f"{ns}matrixSize"][f"{ns}y"] = str(max_phase_int)
-    umcg_headers_dict[f"{ns}ismrmrdHeader"][f"{ns}encoding"][f"{ns}encodingLimits"][f"{ns}kspace_encoding_step_1"][f"{ns}maximum"] = str(max_phase_int)
-    umcg_headers_dict[f"{ns}ismrmrdHeader"][f"{ns}encoding"][f"{ns}encodingLimits"][f"{ns}kspace_encoding_step_1"][f"{ns}center"] = str(max_phase_int//2)
-
-    header_bytes = encode_umcg_header_to_bytes(umcg_to_nyu_dict=umcg_headers_dict)
-    return header_bytes
-
 
 
 def encode_umcg_header_to_bytes(umcg_to_nyu_dict: dict) -> bytes:
@@ -132,20 +104,55 @@ def get_headers_from_h5(fpath: str, verbose=False):
         return root
     
 
+# def process_mrd_if_needed(
+#     cur: sqlite3.Cursor,
+#     pat_out_dir: Path,
+#     raw_ksp_dir: Path,
+#     mrd_xml: Path,
+#     mrd_xsl: Path,
+#     tablename: str,
+#     logger: logging.Logger,
+# ) -> None:
+#     """
+#     Perform .dat to .mrd anonymization if not done already.
+
+#     Parameters:
+#     cur: SQLite cursor object.
+#     pat_out_dir: Path object for patient output directory.
+#     raw_ksp_dir: Path object for raw k-space directory.
+#     logger: Logger object for logging messages.
+#     mrd_xml: Path object for MRD XML file.
+#     mrd_xsl: Path object for MRD XSL file.
+#     tablename (str): Name of the table in the database.
+#     """
+#     cur.execute(f"SELECT has_mrds FROM {tablename} WHERE data_dir = ?", (str(pat_out_dir),))
+#     has_mrd = cur.fetchone()[0]
+
+#     if has_mrd is None or has_mrd == 0:
+#         success = anonymize_mrd_files(pat_out_dir, raw_ksp_dir, logger, mrd_xml, mrd_xsl)  # Implement this function
+
+#         if success:
+#             cur.execute(f"""
+#                 UPDATE {tablename}
+#                 SET has_mrds = 1
+#                 WHERE data_dir = ?
+#             """, (str(pat_out_dir),))
+
+
 def process_mrd_if_needed(
-    cur: sqlite3.Cursor,
+    conn: sqlite3.Connection,  # Pass the connection object instead of the cursor
     pat_out_dir: Path,
     raw_ksp_dir: Path,
-    logger: logging.Logger,
     mrd_xml: Path,
     mrd_xsl: Path,
-    tablename: str  # New parameter for the table name
+    tablename: str,
+    logger: logging.Logger,
 ) -> None:
     """
     Perform .dat to .mrd anonymization if not done already.
 
     Parameters:
-    cur: SQLite cursor object.
+    conn: SQLite connection object.
     pat_out_dir: Path object for patient output directory.
     raw_ksp_dir: Path object for raw k-space directory.
     logger: Logger object for logging messages.
@@ -153,6 +160,7 @@ def process_mrd_if_needed(
     mrd_xsl: Path object for MRD XSL file.
     tablename (str): Name of the table in the database.
     """
+    cur = conn.cursor()
     cur.execute(f"SELECT has_mrds FROM {tablename} WHERE data_dir = ?", (str(pat_out_dir),))
     has_mrd = cur.fetchone()[0]
 
@@ -160,11 +168,18 @@ def process_mrd_if_needed(
         success = anonymize_mrd_files(pat_out_dir, raw_ksp_dir, logger, mrd_xml, mrd_xsl)  # Implement this function
 
         if success:
-            cur.execute(f"""
-                UPDATE {tablename}
-                SET has_mrds = 1
-                WHERE data_dir = ?
-            """, (str(pat_out_dir),))
+            try:
+                with conn:  # This will manage the transaction
+                    cur.execute(f"""
+                        UPDATE {tablename}
+                        SET has_mrds = 1
+                        WHERE data_dir = ?
+                    """, (str(pat_out_dir),))
+                logger.info(f"MRD files for {pat_out_dir} have been processed and database updated.")
+            except sqlite3.Error as e:
+                logger.error(f"Failed to update database for {pat_out_dir}: {e}")
+ 
+            
             
 
 def anonymize_mrd_files(
@@ -204,7 +219,6 @@ def anonymize_mrd_files(
     except subprocess.CalledProcessError as e:
         logger.error(f"An error occurred during the conversion process: {e}")
         return False
-    
     
 
 def convert_ismrmrd_headers_to_dict(ismrmrd_headers):

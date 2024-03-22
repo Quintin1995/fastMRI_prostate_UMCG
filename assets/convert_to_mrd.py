@@ -102,41 +102,6 @@ def get_headers_from_h5(fpath: str, verbose=False):
             print_element(root)
         
         return root
-    
-
-# def process_mrd_if_needed(
-#     cur: sqlite3.Cursor,
-#     pat_out_dir: Path,
-#     raw_ksp_dir: Path,
-#     mrd_xml: Path,
-#     mrd_xsl: Path,
-#     tablename: str,
-#     logger: logging.Logger,
-# ) -> None:
-#     """
-#     Perform .dat to .mrd anonymization if not done already.
-
-#     Parameters:
-#     cur: SQLite cursor object.
-#     pat_out_dir: Path object for patient output directory.
-#     raw_ksp_dir: Path object for raw k-space directory.
-#     logger: Logger object for logging messages.
-#     mrd_xml: Path object for MRD XML file.
-#     mrd_xsl: Path object for MRD XSL file.
-#     tablename (str): Name of the table in the database.
-#     """
-#     cur.execute(f"SELECT has_mrds FROM {tablename} WHERE data_dir = ?", (str(pat_out_dir),))
-#     has_mrd = cur.fetchone()[0]
-
-#     if has_mrd is None or has_mrd == 0:
-#         success = anonymize_mrd_files(pat_out_dir, raw_ksp_dir, logger, mrd_xml, mrd_xsl)  # Implement this function
-
-#         if success:
-#             cur.execute(f"""
-#                 UPDATE {tablename}
-#                 SET has_mrds = 1
-#                 WHERE data_dir = ?
-#             """, (str(pat_out_dir),))
 
 
 def process_mrd_if_needed(
@@ -178,8 +143,6 @@ def process_mrd_if_needed(
                 logger.info(f"MRD files for {pat_out_dir} have been processed and database updated.")
             except sqlite3.Error as e:
                 logger.error(f"Failed to update database for {pat_out_dir}: {e}")
- 
-            
             
 
 def anonymize_mrd_files(

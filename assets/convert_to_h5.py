@@ -91,36 +91,13 @@ def crop_kspace_in_phase_direction(
     return kspace[..., left_crop:-right_crop], new_hdrs
 
 
-# def convert_mrd_to_h5(
-#     pat_dir: Path,
-#     study_date: str,
-#     logger: logging.Logger,
-#     # cur: sqlite3.Cursor,
-#     conn: sqlite3.Connection, 
-#     tablename: str = 'kspace_dset_info'
-# ) -> None:
-#     """
-#     Converts MRD files to H5 format if not already done.
-#     Skips conversion if 'has_h5' is already set for the patient.
-#     """
-#     seq_id, anon_id = pat_dir.name.split('_')
-
-#     # Check if conversion is already done
-#     cur.execute(f"SELECT has_h5 FROM {tablename} WHERE seq_id = ?", (seq_id,))
-#     if cur.fetchone()[0]:
-#         logger.info(f"\tConversion already done for patient {seq_id}. Skipping.")
-#         return
-
-#     logger.info(f"\tConverting .mrd files to .h5 files for patient in {pat_dir}")
-#     perform_conversion(pat_dir, study_date, logger, cur, conn, tablename, seq_id, anon_id)
-
-
 def convert_mrd_to_h5(
     pat_dir: Path,
     study_date: str,
     logger: logging.Logger,
     conn: sqlite3.Connection, 
-    tablename: str = None,
+    tablename_ksp: str = None,
+    tablename_dcm: str = None,
     **kwargs,
 ) -> None:
     """
@@ -137,7 +114,8 @@ def convert_mrd_to_h5(
     raises:
     sqlite3.Error: If an error occurs during database operations.
     """
-    assert tablename is not None, "Table name must be provided."
+    assert tablename_ksp is not None, "Table name for kspace patient info must be provided."
+    assert tablename_dcm is not None, "Table name for DICOM patient info must be provided."
     
     seq_id, anon_id = pat_dir.name.split('_')
 
@@ -145,14 +123,24 @@ def convert_mrd_to_h5(
         with conn:
             cur = conn.cursor()
             # Check if conversion is already done
-            cur.execute(f"SELECT has_h5 FROM {tablename} WHERE seq_id = ?", (seq_id,))
+            cur.execute(f"SELECT has_h5 FROM {tablename_ksp} WHERE seq_id = ?", (seq_id,))
             result = cur.fetchone()
             if result and result[0]:
                 logger.info(f"\tConversion already done for patient {seq_id}. Skipping.")
                 return
             
             logger.info(f"\tConverting .mrd files to .h5 files for patient in {pat_dir}")
-            perform_conversion(pat_dir, study_date, logger, conn, tablename, seq_id, anon_id, **kwargs)
+            perform_conversion(
+                pat_dir       = pat_dir,
+                seq_id        = seq_id,
+                anon_id       = anon_id,
+                study_date    = study_date,
+                tablename_ksp = tablename_ksp,
+                tablename_dcm = tablename_dcm,
+                conn          = conn,
+                logger        = logger,
+                **kwargs
+            )
     except sqlite3.Error as e:
         logger.error(f"Database error during conversion check: {e}")
     except Exception as e:
@@ -161,12 +149,13 @@ def convert_mrd_to_h5(
 
 def perform_conversion(
     pat_dir,
-    study_date: str,
-    logger: logging.Logger,
-    conn: sqlite3.Connection,
-    tablename: str,
     seq_id: str,
     anon_id: str,
+    study_date: str,
+    tablename_ksp: str,
+    tablename_dcm: str,
+    conn: sqlite3.Connection,
+    logger: logging.Logger,
     do_rm_zero_pad: bool = True,
     do_norm_to_ref: bool = True,
     max_phase_crop: int = None,
@@ -177,13 +166,18 @@ def perform_conversion(
     Performs the actual conversion of MRD files to H5 format.
     
     Parameters:
-    pat_dir (Path): Directory of the patient's data.
-    study_date (str): Date of the study.
-    logger (logging.Logger): Logger for error messages.
-    conn (sqlite3.Connection): Connection object for connecting to the database.
-    tablename (str): Name of the database table. the kspace patient info table
-    seq_id (str): Sequential ID of the patient.
-    anon_id (str): Anonymized ID of the patient.
+    pat_dir (Path): Path object pointing to the patient directory.
+    seq_id (str): The sequence ID of the patient.
+    anon_id (str): The anonymized ID of the patient. 
+    study_date (str): The study date of the patient.
+    tablename_ksp (str): Name of the database table for kspace patient info.
+    tablename_dcm (str): Name of the database table for DICOM patient info.
+    conn (sqlite3.Connection): SQLite database connection object.
+    logger (logging.Logger): Logger object for logging messages.
+    do_rm_zero_pad (bool): If True, the zero padding is removed.
+    do_norm_to_ref (bool): If True, the magnitude is normalized to the reference magnitude.
+    max_phase_crop (int): The maximum phase integer value for cropping.
+    max_mag_ref (float): The reference magnitude value. Defaults to 0.010586672.
     
     Raises:
     Exception: If an error occurs during conversion.
@@ -214,7 +208,7 @@ def perform_conversion(
             raise Exception(f"kspace shape is not correct. Shape: {hf['kspace'].shape}")
 
     # Read the first file in the pat_dcm_dir to get the dcm headers. 
-    dcm_hdrs = extract_t2_tra_metadata(pat_dir, study_date, logger, conn, tablename)
+    dcm_hdrs = extract_t2_tra_metadata(pat_dir, study_date, logger, conn, tablename_dcm)
     
     with h5py.File(fpath_hf, 'r+') as hf:  # Add the attributes to the H5 file.
         if len(dict(hf.attrs)) == 0:
@@ -237,8 +231,8 @@ def perform_conversion(
     try:  # Update the database at the end
         with conn:
             cur = conn.cursor()
-            cur.execute(f"UPDATE {tablename} SET has_h5 = 1 WHERE seq_id = ?", (seq_id,))
-            logger.info(f"\tUpdated {tablename} for patient {seq_id} to indicate successful H5 conversion.")
+            cur.execute(f"UPDATE {tablename_ksp} SET has_h5 = 1 WHERE seq_id = ?", (seq_id,))
+            logger.info(f"\tUpdated {tablename_ksp} for patient {seq_id} to indicate successful H5 conversion.")
     except sqlite3.Error as e:
         logger.error(f"Failed to update database for patient {seq_id} with error: {e}")
         

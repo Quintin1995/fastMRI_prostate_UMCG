@@ -2,7 +2,6 @@ import sqlite3
 import logging
 from pathlib import Path
 import subprocess
-
     
     
 def transfer_pat_data_to_hpc(

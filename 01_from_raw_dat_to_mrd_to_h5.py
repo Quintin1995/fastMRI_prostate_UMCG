@@ -6,7 +6,6 @@ from typing import Tuple, List
 import subprocess
 import pydicom
 import yaml
-import shutil
 
 from assets.util import create_directory_structure, setup_logger, format_date
 from assets.cipher import encipher
@@ -76,8 +75,7 @@ def create_and_log_patient_dirs(
     assert key is not None, "Key for enciphering patient number is not provided."
     
     pat_dirs = filter_and_sort_patient_dirs(ksp_dir)
-    print(pat_dirs[0])
-
+    
     for pat_idx, pat_dir in enumerate(pat_dirs, start=1):
         seq_id = pat_dir.split('_')[0]
         
@@ -108,7 +106,12 @@ def create_and_log_patient_dirs(
             break
 
 
-def get_patient_info(target_dir: Path, logger: logging.Logger, verbose: bool = False) -> Tuple[str, str, Path]:
+def get_patient_info(
+    target_dir: Path,
+    logger: logging.Logger = None,
+    seq_id_filter: List[str] = None,
+    verbose: bool = False,
+) -> Tuple[str, str, Path]:
     """
     Retrieve and sort patient directories in a given target directory based on the patient number.
 
@@ -128,8 +131,11 @@ def get_patient_info(target_dir: Path, logger: logging.Logger, verbose: bool = F
 
     # Create tuples from sorted directories.
     pat_info = [(f.name.split('_')[0], f.name.split('_')[1], f) for f in pat_dirs]
+    
+    # only keep the patients that are in the filter list
+    if seq_id_filter is not None:
+        pat_info = [pat for pat in pat_info if pat[0] in seq_id_filter]
 
-    # Verbose logging
     if verbose:
         for pat_number, anon_id, full_path in pat_info:
             logger.info(f"Patient Number: {pat_number}, anon_id: {anon_id}, Full Path: {full_path}")
@@ -366,7 +372,7 @@ def main():
     create_and_log_patient_dirs(cfg['ksp_in_dir'], pat_data_dir, logger, **cfg)
 
     # Get the patient info and update the database SQlite
-    patients = get_patient_info(pat_data_dir, logger, verbose=False)
+    patients = get_patient_info(pat_data_dir, logger=logger, seq_id_filter=cfg['seq_id_filter'], verbose=False)
     
     if False:       # Temporary to write the patient info to a csv file
         write_pat_info_to_file(patients, logger, cfg['out_dir'], **cfg)

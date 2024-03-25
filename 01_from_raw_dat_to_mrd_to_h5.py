@@ -341,6 +341,8 @@ def main():
     
     sudo umount /mnt/d
     sudo mount -t drvfs D: /mnt/d
+    sudo umount /mnt/f
+    sudo mount -t drvfs F: /mnt/f
     
         This code reads from an external hard-drive (SSD) because we are dealing with a lot of data.
         In fact even from SSD (D) to another SSD (E)

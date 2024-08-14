@@ -9,10 +9,9 @@ This pipeline is designed for converting T2w Transversal/axial k-space data from
    - The k-space data contains three interleaved averages. Unlike traditional methods that average these, this pipeline preserves all three averages for enhanced flexibility in reconstruction.
 
 3. **Metadata Integrity**:
-   - Headers and DICOM metadata are preserved to ensure accurate reconstruction, with an option to restore original Field of View (FOV) if needed.
+   - Headers and DICOM metadata are preserved to ensure accurate reconstruction, with an option to restore original Field of View (FOV) if needed yet to be released.
 
-4. **Applications**:
-   - The output .h5 files are optimized for training and inference in AI models, with careful handling of k-space data to maintain high fidelity in the final reconstructed images.
+The output .h5 files are optimized for training and inference in AI models, with careful handling of k-space data to maintain high fidelity in the final reconstructed images.
 
 
 # General Pipeline Processing Steps

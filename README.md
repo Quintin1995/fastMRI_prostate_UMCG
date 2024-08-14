@@ -1,45 +1,48 @@
-# Use case
-Convert raw multi-average multi-coil k-space (.dat files) into .h5 files that can be used for training and inference of deep learning reconstruction models.
+# T2w Transversal/axial k-space Data Conversion for AI
+This pipeline is designed for converting T2w Transversal/axial k-space data from Siemens MRI scanners into a format suitable for deep learning applications. The process involves three key stages: 
+
+1. **Conversion Workflow**: 
+   - Convert raw .dat files to .mrd format using the ISMRMRD framework.
+   - Further convert .mrd files to .h5 format, maintaining all essential metadata and headers.
+   
+2. **Handling Interleaved Averages**:
+   - The k-space data contains three interleaved averages. Unlike traditional methods that average these, this pipeline preserves all three averages for enhanced flexibility in reconstruction.
+
+3. **Metadata Integrity**:
+   - Headers and DICOM metadata are preserved to ensure accurate reconstruction, with an option to restore original Field of View (FOV) if needed.
+
+4. **Applications**:
+   - The output .h5 files are optimized for training and inference in AI models, with careful handling of k-space data to maintain high fidelity in the final reconstructed images.
 
 
 # General Pipeline Processing Steps
-1. The database is checked to see which steps must still be performed for the current patient.
-2. Convert .dat to .mrd.
-    * For this we use the 'siemens_to_ismrmrd' tool [Siemens to ISMRMRD Github](https://github.com/ismrmrd/siemens_to_ismrmrd).
-3. Copy anonymized dicom if required (T2w).
-    * The FOV of the k-space is differnt than the DICOM. Therefore we store the DICOM and its headers so that we can restore the 'correct' FOV after reconstruction.
-    * This FOV can be used for the lesion segmentations if they are available.
-4. Copy niftis if required.
-5. Link the dicom and k-space based on the studydate
-6. Convert .mrd to .h5.
-    1. Convert to array
-        1. Build k-space array from ISMRMRD object
-            1. Get first acquisition.
-            2. Initialize empty matrix.
-            3. Iteratively fill the array based on the location within the object.
-        2. Reorder k-space array (odd and even lines). Fix interleaving.
-        3. Remove zero-padding if required
-        4. Crop k-space in phase encoding direction if required.
-        5. Normalize k-space to a reference k-space if required.
-        6. Root Sum of squares (RSS) for visualization of correct processing if required.
-    2. Extract T2w Tra meta data to be stored in the H5
-7. Transfer to a high performance cluster for Training or Inference of a Deep Learning Reconstruction model.
-
+1. **Check Database**: Determine which steps are required for the current patient.
+2. **Convert .dat to .mrd**:
+   - Utilize the [siemens_to_ismrmrd](https://github.com/ismrmrd/siemens_to_ismrmrd) tool.
+3. **Anonymize DICOM**:
+   - Store DICOM files and headers to restore the 'correct' FOV after reconstruction.
+   - FOV used for lesion segmentation if available.
+4. **Copy Niftis**: If required.
+5. **Link DICOM and k-space**: Based on study date.
+6. **Convert .mrd to .h5**:
+   1. **Convert to Array**:
+      - Build k-space array from ISMRMRD object.
+      - Reorder k-space array and fix interleaving.
+      - Remove zero-padding, crop, normalize, and apply Root Sum of Squares (RSS) if required.
+   2. **Extract Metadata**: T2w Tra metadata is stored in the H5.
+7. **Transfer Data**: Send to a high-performance cluster for deep learning reconstruction model training or inference.
 
 # Configuration
-TBD.
+*To Be Determined (TBD)*
 
-# K-space averages
-The first and third averages masure odd lines, while the second average measures even lines. An option to create 1 k-space from all three averages:
+# K-space Averages
+The first and third averages measure odd lines, while the second average measures even lines. You can create one k-space from all three averages:
 K<sub>full</sub> = (K<sub>1</sub>+K<sub>3</sub>)/2 + K<sub>2</sub>
-![avg_example](figures/average_combination_example.png)
-
+![Average Example](figures/average_combination_example.png)
 
 # Database
-Since the processing of the data from .dat to .mrd to .h5 takes multiple steps and numerous operations, we keep track of the status of each step in database table in SQLite.
-Configurations for this can be found in the configuration file.
-
+A database table in SQLite tracks the status of each processing step from .dat to .mrd to .h5. Configurations are stored in a configuration file.
 
 # Examples
-Example slice of k-space averages and their respective ordering for NYU and UMCG data.
-![example](figures/kspace_example_nyu_and_umcg.png)
+Example slice of k-space averages and their ordering for NYU and UMCG data.
+![Example](figures/kspace_example_nyu_and_umcg.png)

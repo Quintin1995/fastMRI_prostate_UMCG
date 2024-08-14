@@ -27,11 +27,11 @@ Convert raw multi-average multi-coil k-space (.dat files) into .h5 files that ca
 
 
 # Configuration
-There is a configuration file.
+TBD.
 
 # K-space averages
 The first and third averages masure odd lines, while the second average measures even lines. An option to create 1 k-space from all three averages:
-K~full~ = (K~1~+K~3~)/2 + K~2~
+K<sub>full</sub> = (K<sub>1</sub>+K<sub>3</sub>)/2 + K<sub>2</sub>
 ![avg_example](figures/average_combination_example.png)
 
 

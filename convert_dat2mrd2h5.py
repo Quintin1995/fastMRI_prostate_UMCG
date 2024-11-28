@@ -32,6 +32,12 @@ def parse_args(verbose: bool = False):
                         type=str,
                         default="configs/config.yaml",         # this is the FASTMRI1 drive, EXTERNAL SSD (D:)
                         help="Path to the config file.")
+    # lets add a key string to encipher the patient number it is required 
+    parser.add_argument("-k",
+                        "--key",
+                        type=str,
+                        required=True,
+                        help="Key to encipher/decipher the patient number.")
     
     a = parser.parse_args()
 
@@ -336,26 +342,6 @@ def load_config():
 
 
 def main():
-    """
-    MOUNTING AN EXTERNAL DRIVE ON WSL:
-    
-    sudo umount /mnt/d
-    sudo mount -t drvfs D: /mnt/d
-    sudo umount /mnt/f
-    sudo mount -t drvfs F: /mnt/f
-    
-        This code reads from an external hard-drive (SSD) because we are dealing with a lot of data.
-        In fact even from SSD (D) to another SSD (E)
-        I use WSL on windows and it might not recongnize the SSDs as mounted drives.
-        If you want to make sure that the mounted drive can be found:
-        - Open the WSL terminal
-        - Type 'cd /mnt'
-        - Type 'ls'
-        - You should see the mounted drives there.
-        - if it doesnt exist, you can make the drive letter available by typing 'mkdir /mnt/e' for example.
-        - Then the letter can be assigned to the drive that is inserted into the computer like:
-        - 'sudo mount -t drvfs E: /mnt/e'
-    """
     cfg = load_config()
 
     # These patients are excluded for h5 conversion for now for some reason
@@ -422,4 +408,24 @@ def main():
 
 #########################################################################
 if __name__ == "__main__":
+    """
+    MOUNTING AN EXTERNAL DRIVE ON WSL:
+    
+    sudo umount /mnt/d
+    sudo mount -t drvfs D: /mnt/d
+    sudo umount /mnt/f
+    sudo mount -t drvfs F: /mnt/f
+    
+        This code reads from an external hard-drive (SSD) because we are dealing with a lot of data.
+        In fact even from SSD (D) to another SSD (E)
+        I use WSL on windows and it might not recongnize the SSDs as mounted drives.
+        If you want to make sure that the mounted drive can be found:
+        - Open the WSL terminal
+        - Type 'cd /mnt'
+        - Type 'ls'
+        - You should see the mounted drives there.
+        - if it doesnt exist, you can make the drive letter available by typing 'mkdir /mnt/e' for example.
+        - Then the letter can be assigned to the drive that is inserted into the computer like:
+        - 'sudo mount -t drvfs E: /mnt/e'
+    """
     main()

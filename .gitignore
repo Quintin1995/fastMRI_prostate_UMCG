@@ -163,3 +163,4 @@ cython_debug/
 cipher.py
 /venv_ksp_wsl
 /configs/config.yaml
+/data

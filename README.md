@@ -45,3 +45,11 @@ A database table in SQLite tracks the status of each processing step from .dat t
 # Examples
 Example slice of k-space averages and their ordering for NYU and UMCG data.
 ![Example](figures/kspace_example_nyu_and_umcg.png)
+
+
+# Converting DWI
+siemens_to_ismrmrd -f data/0003/kspaces/meas_MID00396_FID373318_ep2d_diff_b50_500_1000_tra_p2.dat \
+-m custom_param_maps/dwi/IsmrmrdParameterMap_Siemens_DIAG.xml \
+-x custom_param_maps/dwi/IsmrmrdParameterMap_Siemens_EPI_DIAG.xsl \
+-o data/0003/kspaces/meas_MID00396_FID373318_ep2d_diff_b50_500_1000_tra_p2.mrd \
+-Z

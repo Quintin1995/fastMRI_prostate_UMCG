@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from xml.dom import minidom
 from pydicom import dcmread
 
-from assets.cipher import encipher, decipher
+# from assets.cipher import encipher, decipher
 
 def format_date(date_string: str):
     date_object = datetime.strptime(date_string, "%Y%m%d")
@@ -312,7 +312,7 @@ def find_t2_tra_kspace_files(patient_kspace_directory: Path, logger: logging.Log
     return list(unique_file_paths)
 
 
-def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
+def setup_logger(log_dir: Path, namepart: str = "", use_time: bool = True) -> logging.Logger:
     """
     Configure logging to both console and file.
     This function sets up logging based on the specified logging directory.
@@ -320,14 +320,15 @@ def setup_logger(log_dir: Path, use_time: bool = True) -> logging.Logger:
     messages to both the console and the log file.
     Parameters:
     - log_dir (Path): Directory where the log file will be stored.
+    - namepart (str): Optional part of the log file name.
     Returns:
     - logging.Logger: Configured logger instance.
     """
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     if use_time: 
-        log_file = log_dir / f"log_{current_time}.log"
+        log_file = log_dir / f"{namepart}log_{current_time}.log"
     else:
-        log_file = log_dir / "log.log"
+        log_file = log_dir / f"{namepart}log.log"
 
     l = logging.getLogger()
     l.setLevel(logging.INFO)

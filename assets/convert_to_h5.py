@@ -289,19 +289,6 @@ def convert_mrd_to_array(
     return kspace, trans_hdrs
 
 
-# def create_h5_if_not_exists(fpath_hf: str) -> None:
-#     '''
-#     Description:
-#         This function creates an h5 file if it does not exist.
-#     Args:
-#         fpath_hf (str): The path to the h5 file.
-#     '''
-#     if not os.path.exists(fpath_hf):
-#         with h5py.File(fpath_hf, 'w') as hf:
-#             print(f"\tcreated h5 file at {fpath_hf}")
-#     else:
-#         print(f"\tH5 file already exists: {fpath_hf}")
-
 def create_h5_if_not_exists(fpath_hf: str, logger: logging.Logger) -> None:
     '''
     Description:

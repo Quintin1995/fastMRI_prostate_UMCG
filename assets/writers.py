@@ -6,40 +6,40 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from assets.util import dt_str
-from assets.util import decipher
+# from assets.util import decipher
 
 
-def write_pat_info_to_file(patients, logger, out_dir, key: str=None):
-    """	
-    Write patient info to a csv file.
-    """
+# def write_pat_info_to_file(patients, logger, out_dir, key: str=None):
+#     """	
+#     Write patient info to a csv file.
+#     """
     
-    assert key is not None, "key must be provided to decipher the anon_id"
+#     assert key is not None, "key must be provided to decipher the anon_id"
     
-    df = pd.DataFrame(columns=['seq_id', 'id', 'anon_id', 'data_dir'])
-    new_rows = []
+#     df = pd.DataFrame(columns=['seq_id', 'id', 'anon_id', 'data_dir'])
+#     new_rows = []
 
-    for seq_id, anon_id, pat_dir in patients:
-        id = decipher(anon_id, key=key)
+#     for seq_id, anon_id, pat_dir in patients:
+#         id = decipher(anon_id, key=key)
         
-        new_row = pd.DataFrame({
-            'seq_id': [seq_id],
-            'id': [id],
-            'anon_id': [anon_id],
-            'data_dir': [pat_dir]
-        })
-        new_rows.append(new_row)
+#         new_row = pd.DataFrame({
+#             'seq_id': [seq_id],
+#             'id': [id],
+#             'anon_id': [anon_id],
+#             'data_dir': [pat_dir]
+#         })
+#         new_rows.append(new_row)
         
-    df = pd.concat([df] + new_rows, ignore_index=True)
+#     df = pd.concat([df] + new_rows, ignore_index=True)
     
-    df['seq_id'] = "'" + df['seq_id'].astype(str)
-    df['id'] = "'" + df['id'].astype(str)
-    df['anon_id'] = "'" + df['anon_id'].astype(str)
-    df['data_dir'] = "'" + df['data_dir'].astype(str)
+#     df['seq_id'] = "'" + df['seq_id'].astype(str)
+#     df['id'] = "'" + df['id'].astype(str)
+#     df['anon_id'] = "'" + df['anon_id'].astype(str)
+#     df['data_dir'] = "'" + df['data_dir'].astype(str)
     
-    dirname = out_dir / 'mappings'
-    df.to_csv(dirname / 'patient_info.csv', index=False, sep=';')
-    logger.info(f"Saved patient info to {dirname / 'patient_info.csv'}")
+#     dirname = out_dir / 'mappings'
+#     df.to_csv(dirname / 'patient_info.csv', index=False, sep=';')
+#     logger.info(f"Saved patient info to {dirname / 'patient_info.csv'}")
 
 
 def save_numpy_rss_as_nifti(image: np.ndarray, fname: str, dir: str, logger: logging.Logger = None) -> None:

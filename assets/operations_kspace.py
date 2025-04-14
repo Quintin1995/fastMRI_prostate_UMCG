@@ -1,7 +1,8 @@
 import ismrmrd
-from assets.writers import save_crop_to_file, save_crops_to_file
+# from assets.writers import save_crop_to_file, save_crops_to_file
 import numpy as np
 import logging
+import time
 
 
 def remove_zero_padding(kspace: np.ndarray, logger: logging.Logger = None) -> np.ndarray:
@@ -162,7 +163,7 @@ def analyze_kspace_3d_vol(ksp: np.ndarray, label="") -> None:
     del kspace_vol, kspace_vol_real, kspace_vol_imag
 
 
-def echo_train_length(dset) -> int:
+def echo_train_length(dset, verbose=False) -> int:
     '''
     Description: 
         This function determines the echo train length from the .mrd file
@@ -177,6 +178,10 @@ def echo_train_length(dset) -> int:
     Returns:
         - etl: echo train length
     '''
+    if verbose:
+        start_time = time.time()
+        print(f"Computing Echo Train Length...")
+
     for n in range(dset.number_of_acquisitions()):
         if dset.read_acquisition(n).isFlagSet(ismrmrd.ACQ_IS_NOISE_MEASUREMENT):
             continue
@@ -185,11 +190,13 @@ def echo_train_length(dset) -> int:
             break
     for n in range(dset.number_of_acquisitions()):
         if dset.read_acquisition(n)._head.idx.slice != dset.read_acquisition(0)._head.idx.slice:
+            if verbose:
+                print(f"\tFound different slice at acquisition {n}, so echo train length is {n - firstacq}. Time elapsed in seconds: {time.time() - start_time}")
             return n - firstacq
     raise Exception("Couldn't find different slices in the dataset")
 
 
-def echo_train_count(dset, echo_train_len=25) -> int:
+def echo_train_count(dset, echo_train_len=25, verbose=False) -> int:
     '''
     Description:
         This function determines the echo train count from the .mrd file
@@ -203,13 +210,16 @@ def echo_train_count(dset, echo_train_len=25) -> int:
     Returns:
         - echo_train_count: echo train count
     '''
-    enc = ismrmrd.xsd.CreateFromDocument(dset.read_xml_header()).encoding[0]
+    if verbose:
+        start_time = time.time()
+        print(f"Computing Echo Train Count... Going to loop through all acquisitions, until we find the second average. Then ETL = int(count / (nslices * ETL))")
 
+    enc = ismrmrd.xsd.CreateFromDocument(dset.read_xml_header()).encoding[0]
     if enc.encodingLimits.slice != None:
         nslices = enc.encodingLimits.slice.maximum + 1
     else:
         raise Exception("Couldn't find different slices in the dataset")
-    
+
     count = 0
     for n in range(dset.number_of_acquisitions()):
         if dset.read_acquisition(n)._head.idx.average == 2:
@@ -217,6 +227,8 @@ def echo_train_count(dset, echo_train_len=25) -> int:
         if dset.read_acquisition(n)._head.idx.average == 1:
             count += 1
 
+    if verbose:
+        print(f"\tFound second average at acquisition {n}, so echo train count is {count}. Time elapsed in seconds: {time.time() - start_time}")
     return int(count/(nslices * echo_train_len))
 
 
@@ -236,23 +248,22 @@ def get_num_averages(dset, firstacq: int):
     return averages + 1
 
 
+# def view_stats_kspace(kspace: np.ndarray, tmpdir: str, pat_num: str, save_crops: False) -> None:
+#     '''
+#     Arguments:
+#         - kspace: numpy array of kspace data in shape (navgs, nslices, ncoils, rNx, eNy + 1) complex
+#         - tmpdir: directory to save the crops to
+#         - pat_num: patient number
+#         - save_crops: whether to save crops of the first two slices
+#     '''
+#     print(f"kspace shape: {kspace.shape}")
+#     print(f"kspace dtype: {kspace.dtype}")
 
-def view_stats_kspace(kspace: np.ndarray, tmpdir: str, pat_num: str, save_crops: False) -> None:
-    '''
-    Arguments:
-        - kspace: numpy array of kspace data in shape (navgs, nslices, ncoils, rNx, eNy + 1) complex
-        - tmpdir: directory to save the crops to
-        - pat_num: patient number
-        - save_crops: whether to save crops of the first two slices
-    '''
-    print(f"kspace shape: {kspace.shape}")
-    print(f"kspace dtype: {kspace.dtype}")
-
-    if save_crops:
-        save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=0, slice=0, coil=0)
-        save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=1, slice=0, coil=0)
-        save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=2, slice=0, coil=0)
-        save_crops_to_file(tmpdir, pat_num, kspace, cropsize=30, slice=0, coil=0)
+#     if save_crops:
+#         save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=0, slice=0, coil=0)
+#         save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=1, slice=0, coil=0)
+#         save_crop_to_file(tmpdir, pat_num, kspace, cropsize=30, avg=2, slice=0, coil=0)
+#         save_crops_to_file(tmpdir, pat_num, kspace, cropsize=30, slice=0, coil=0)
         
 
 def calculate_zero_padding_PE(kspace: np.ndarray, slice_no: int = 0, coil_no: int = 0):

@@ -9,12 +9,45 @@ Description:
 from pathlib import Path
 import sqlite3
 import pandas as pd
+import logging
 import twixtools
 import ismrmrd
 from assets.operations_kspace import get_first_acquisition, echo_train_count, echo_train_length, get_num_averages
-
-
 from typing import Dict, List
+from datetime import datetime
+
+
+def get_logger(name: str, log_dir: Path, level: int = logging.INFO) -> logging.Logger:
+    """
+    Create (or retrieve) a logger that writes to both console and a dated file.
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    date = datetime.now().strftime("%Y%m%d")
+    logfile = log_dir / f"{name}_{date}.log"
+
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+
+    # avoid adding handlers multiple times
+    if not logger.handlers:
+        fmt = logging.Formatter(
+            "[%(asctime)s] %(levelname)-8s %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+
+        # File handler
+        fh = logging.FileHandler(logfile, encoding="utf-8")
+        fh.setLevel(level)
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+
+        # Console handler
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        ch.setFormatter(fmt)
+        logger.addHandler(ch)
+
+    return logger
 
 
 def create_db_table_if_not_exists(db_path: Path, table_name: str):
@@ -31,7 +64,8 @@ def create_db_table_if_not_exists(db_path: Path, table_name: str):
         c.execute(f"""
             CREATE TABLE IF NOT EXISTS {table_name} (
                 aqc_idx          INTEGER,
-                seq_id           TEXT,
+                id               TEXT,
+                fname            TEXT,
                 avg_idx          INTEGER,
                 col_idx          INTEGER,
                 slice_idx        INTEGER,
@@ -40,9 +74,9 @@ def create_db_table_if_not_exists(db_path: Path, table_name: str):
             );
         """)
         conn.commit()
-        print(f"Table '{table_name}' ensured in database '{db_path}'.")
+        LOGGER.info(f"Table '{table_name}' ensured in database '{db_path}'.")
     except Exception as e:
-        print(f"Error creating table: {e}")
+        LOGGER.info(f"Error creating table: {e}")
     finally:
         conn.close()
 
@@ -53,14 +87,14 @@ def insert_acquisition_data_to_db(acq_data: list, db_path: Path, table_name: str
     """
     try:
         df = pd.DataFrame(acq_data)
-        if 'seq_id' not in df.columns:
-            df['seq_id'] = ""
+        if 'id' not in df.columns:
+            df['id'] = ""
         conn = sqlite3.connect(str(db_path))
         df.to_sql(table_name, con=conn, if_exists='append', index=False)
         conn.commit()
-        print(f"Inserted {len(df)} rows into table '{table_name}'.")
+        LOGGER.info(f"Inserted {len(df)} rows into table '{table_name}'.")
     except Exception as e:
-        print(f"Error inserting data into table: {e}")
+        LOGGER.info(f"Error inserting data into table: {e}")
     finally:
         conn.close()
 
@@ -71,7 +105,7 @@ def find_mrd_file_wrapper(id: str, mrd_root_dir: Path) -> Path:
         mrd_pat_dir = mrd_root_dir / id / 'mrds'
         mrd_fpath = find_mrd_fpath(id, mrd_pat_dir)  # <-- Your helper function to locate the file
     except Exception as e:
-        print(f"Error finding MRD file for patient {id}: {e}")
+        LOGGER.warning(f"Error finding MRD file for patient {id}: {e}")
         return []
     return mrd_fpath
 
@@ -90,10 +124,10 @@ def find_starting_acq_idx_first_echo_train(dset: ismrmrd.Dataset, firstacq: int)
         if init_col_idx == -1:  # first acquisition 
             init_col_idx = col_idx
         elif init_col_idx == col_idx:   # if the column index is the same as the initial one, we skip it
-            print(f"Skipping acquisition {acq_idx} because col_idx is the same as init_col_idx") if acq_idx % 250 == 0 else None
+            LOGGER.info(f"Skipping acquisition {acq_idx} because col_idx is the same as init_col_idx") if acq_idx % 250 == 0 else None
             continue
         else:   # now we have started and skipped all the initial acquisitions
-            print(f"Found starting acquisition index: {acq_idx} (col_idx: {col_idx})")
+            LOGGER.info(f"Found starting acquisition index: {acq_idx} (col_idx: {col_idx})")
             return acq_idx
 
 
@@ -102,14 +136,14 @@ def process_patient_mrd(pat_id: str, cfg: Dict[str, str]):
     Process a single patient: extract image acquisition metadata from the last
     measurement (assumed to be image data) and write it to the database.
     """
-    print(f"\nProcessing patient: {pat_id}")
+    LOGGER.info(f"\nProcessing patient: {pat_id}")
     mrd_fpath = find_mrd_file_wrapper(pat_id, cfg['mrd_root_dir'])
 
     try:
         dset = ismrmrd.Dataset(mrd_fpath, create_if_needed=False)
-        print(f"Successfully loaded MRD data for patient {pat_id}.")
+        LOGGER.info(f"Successfully loaded MRD data for patient {pat_id}.")
     except Exception as e:
-        print(f"Error loading MRD data for patient {pat_id}: {e}")
+        LOGGER.warning(f"Error loading MRD data for patient {pat_id}: {e}")
         return []
 
     firstacq   = get_first_acquisition(dset)
@@ -122,8 +156,8 @@ def process_patient_mrd(pat_id: str, cfg: Dict[str, str]):
     last_et          = 0
     start            = find_starting_acq_idx_first_echo_train(dset, firstacq=firstacq)
     for acq_idx in range(start, dset.number_of_acquisitions()):
-        # percentage of progress print
-        print(f"Processing acquisition {acq_idx} of {dset.number_of_acquisitions()} ({(acq_idx / dset.number_of_acquisitions()) * 100:.2f}%)") if acq_idx % 250 == 0 else None
+        # percentage of progress LOGGER.info
+        LOGGER.info(f"Processing acquisition {acq_idx} of {dset.number_of_acquisitions()} ({(acq_idx / dset.number_of_acquisitions()) * 100:.2f}%)") if acq_idx % 250 == 0 else None
         acq            = dset.read_acquisition(acq_idx)
         slice_idx      = acq.idx.slice
         col_idx        = acq.idx.kspace_encode_step_1
@@ -135,7 +169,7 @@ def process_patient_mrd(pat_id: str, cfg: Dict[str, str]):
 
         # if the current slice index is bigger then the last recorded one, then we increment the echo trains counter. Then we have had the last slice and move on to the next echo train.
         if slice_idx < last_slice:
-            print(f"acq_idx: {acq_idx}, avg_idx: {avg_idx}, col_idx: {col_idx}, cSlc: {slice_idx}, echo_train_idx: {last_et}")
+            LOGGER.info(f"acq_idx: {acq_idx}, avg_idx: {avg_idx}, col_idx: {col_idx}, cSlc: {slice_idx}, echo_train_idx: {last_et}")
             last_et += 1
 
         # if the current average is bigger then the last recorded one, then we reset the echo trains counter
@@ -144,55 +178,54 @@ def process_patient_mrd(pat_id: str, cfg: Dict[str, str]):
 
         echo_train_mapping.append(
             {
-                'acq_idx':   acq_idx,
-                'seq_id':    pat_id,
-                'avg_idx':   avg_idx,
-                'col_idx':   col_idx,
-                'slice_idx': slice_idx,
-                'echo_train_idx': last_et,
+                'acq_idx':          acq_idx,
+                'id':               pat_id,
+                'fname':            mrd_fpath.name, 
+                'avg_idx':          avg_idx,
+                'col_idx':          col_idx,
+                'slice_idx':        slice_idx,
+                'echo_train_idx':   last_et,
                 'inner_et_counter': inner_et_counter,
             }
         )
-        # print(f"Added: acq_idx: {acq_idx}, pat_id: {pat_id}, avg_idx: {avg_idx}, col_idx: {col_idx}, slice_idx: {slice_idx}, echo_train_idx: {last_et}, inner_et_counter: {inner_et_counter}")
+        # LOGGER.info(f"Added: acq_idx: {acq_idx}, pat_id: {pat_id}, avg_idx: {avg_idx}, col_idx: {col_idx}, slice_idx: {slice_idx}, echo_train_idx: {last_et}, inner_et_counter: {inner_et_counter}")
         last_avg = avg_idx      # update the last average index
         last_slice = slice_idx
         inner_et_counter += 1
-
         # if acq_idx > 3500:
         #     break
     return echo_train_mapping
 
 
 def find_mrd_fpath(id: str, mrd_root_dir: Path) -> Path:
-
     t2_tse_files = list(mrd_root_dir.glob('meas_MID*2.mrd'))
-    print(f"Found {len(t2_tse_files)} .mrd files in {mrd_root_dir} for patient ID {id}.")
+    LOGGER.info(f"Found {len(t2_tse_files)} .mrd files in {mrd_root_dir} for patient ID {id}.")
     if len(t2_tse_files) == 0:
         raise FileNotFoundError(f"No .mrd files found in {mrd_root_dir} for patient ID {id}.")
-    [print(f) for f in t2_tse_files]
+    [LOGGER.info(f) for f in t2_tse_files]
     
-    good_files = []
+    good_files = []     # as in: t2 large files
     for mrd_file in t2_tse_files:
-        print(f"Processing {mrd_file}")
+        LOGGER.info(f"Processing {mrd_file}")
         file_size = mrd_file.stat().st_size  # size in bytes
-        print(f"File size: {file_size / (1024**2):.2f} MB")
+        LOGGER.info(f"File size: {file_size / (1024**2):.2f} MB")
         if file_size < 1 * 1024**3:
-            print(f"Skipping {mrd_file}, size {file_size} bytes is smaller than 1GB.")
+            LOGGER.warning(f"Skipping {mrd_file}, size {file_size} bytes is smaller than 1GB.")
             continue
         else: # file size is larger than 1GB
             good_files.append(mrd_file)
-            print(f"Adding {mrd_file} to the list of good files.")
-        print(f"Processing {mrd_file} (size: {file_size} bytes)")
+            LOGGER.info(f"Adding {mrd_file} to the list of good files.")
+        LOGGER.info(f"Processing {mrd_file} (size: {file_size} bytes)")
 
     # show the user the .mrd options and ask for input in which to select with the index and return that one.
     if len(good_files) == 1:
-        print(f"Only one good file found: {good_files[0]}")
+        LOGGER.info(f"Only one good file found: {good_files[0]}")
         return good_files[0]
     elif len(good_files) > 1:
-        print(f"Multiple good files found: {good_files}")
-        print("Please select the file to process by entering the index (0, 1, 2, ...):")
+        LOGGER.warning(f"Multiple good files found: {good_files}")
+        LOGGER.info("Please select the file to process by entering the index (0, 1, 2, ...):")
         for i, f in enumerate(good_files):
-            print(f"{i}: {f}")
+            LOGGER.info(f"{i}: {f}")
         while True:
             try:
                 idx = int(input("Enter the index of the file to process: "))
@@ -200,9 +233,9 @@ def find_mrd_fpath(id: str, mrd_root_dir: Path) -> Path:
                     raise ValueError("Index out of range.")
                 return good_files[idx]
             except ValueError as e:
-                print(f"Invalid input: {e}. Please enter a valid index.")
+                LOGGER.warning(f"Invalid input: {e}. Please enter a valid index.")
     else: 
-        print(f"No good files found in {mrd_root_dir} for patient ID {id}.")
+        LOGGER.warning(f"No good files found in {mrd_root_dir} for patient ID {id}.")
         # raise file not found error
         raise FileNotFoundError(f"No good .mrd files found in {mrd_root_dir} for patient ID {id}.")
 
@@ -220,26 +253,26 @@ def main():
 
     # All patient IDs to consider for Uncertainty Quantification
     pat_ids = [
-        '0003_ANON5046358',
-        # '0004_ANON9616598',
-        # '0005_ANON8290811',
-        # '0006_ANON2379607',
-        # '0007_ANON1586301',
-        # '0008_ANON8890538',
-        # '0010_ANON7748752',
-        # '0011_ANON1102778',
-        # '0012_ANON4982869',
-        # '0013_ANON7362087',
-        # '0014_ANON3951049',
-        # '0015_ANON9844606',
-        # '0018_ANON9843837',
-        # '0019_ANON7657657',
-        # '0020_ANON1562419',
-        # '0021_ANON4277586',
-        # '0023_ANON6964611',
-        # '0024_ANON7992094',
-        # '0026_ANON3620419',
-        # '0027_ANON9724912',
+        # '0003_ANON5046358',     # DONE
+        # '0004_ANON9616598',     # DONE
+        # '0005_ANON8290811',     # DONE
+        '0006_ANON2379607',
+        '0007_ANON1586301',
+        '0008_ANON8890538',
+        '0010_ANON7748752',
+        '0011_ANON1102778',
+        '0012_ANON4982869',
+        '0013_ANON7362087',
+        '0014_ANON3951049',
+        '0015_ANON9844606',
+        '0018_ANON9843837',
+        '0019_ANON7657657',
+        '0020_ANON1562419',
+        '0021_ANON4277586',
+        '0023_ANON6964611',
+        '0024_ANON7992094',
+        '0026_ANON3620419',
+        '0027_ANON9724912',
         # '0028_ANON3394777',
         # '0029_ANON7189994',
         # '0030_ANON3397001',
@@ -346,9 +379,13 @@ def main():
     cfg = {
         'mrd_root_dir': Path(r'\\zkh\appdata\research\Radiology\fastMRI_PCa\03_data\002_processed_pst_ksp_umcg_backup\data\pat_data'),
         'db_fpath': Path('databases/master_habrok_20231106_v2.db'),
-        'table_name': 'echo_train_mapping'
+        'table_name': 'echo_train_mapping',
+        'logdir': Path('logs'),
+        'logfile': 'echo_train_mapping.log',
     }
+
     tablename = cfg['table_name'] + '_debug' if DEBUG else cfg['table_name']
+    
     # if the table exists we delete it and create a new one.
     if DEBUG:
         conn = sqlite3.connect(cfg['db_fpath'])
@@ -356,28 +393,30 @@ def main():
         c.execute(f"DROP TABLE IF EXISTS {tablename}")
         conn.commit()
         conn.close()
-        print(f"Table '{tablename}' dropped from database '{cfg['db_fpath']}'.")
+        LOGGER.warning(f"Table '{tablename}' dropped from database '{cfg['db_fpath']}'.")
     create_db_table_if_not_exists(cfg['db_fpath'], tablename)
 
     # Process each patient.
     for id in pat_ids:
+        # Create the mapping
         echo_train_mapping = process_patient_mrd(id, cfg)
-        # Convert the list of dictionaries into a DataFrame.
         df = pd.DataFrame(echo_train_mapping)
-        print(df.head(51))
-        
-        # Open a connection using sqlite3 and insert the data.
+
+        # Insert the data into the database
         conn = sqlite3.connect(str(cfg['db_fpath']))
         df.to_sql(tablename, con=conn, if_exists='append', index=False)
         conn.commit()
         conn.close()
-        
-        print(f"Inserted {len(df)} rows into table '{tablename}'.")
-
-
-
+        LOGGER.info(f"Inserted {len(df)} rows into table '{tablename}'.")
 
 
 
 if __name__ == "__main__":
+
+    LOGGER = get_logger(
+        name="echo_train_mapping",
+        log_dir=Path("logs"),
+        level=logging.DEBUG
+    )
+
     main()

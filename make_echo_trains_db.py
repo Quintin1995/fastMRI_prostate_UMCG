@@ -256,23 +256,23 @@ def main():
         # '0003_ANON5046358',     # DONE    # PART 1
         # '0004_ANON9616598',     # DONE    # PART 1
         # '0005_ANON8290811',     # DONE    # PART 1
-        '0006_ANON2379607',                 # PART 1
-        '0007_ANON1586301',                 # PART 1
-        '0008_ANON8890538',                 # PART 1
-        '0010_ANON7748752',                 # PART 1
-        '0011_ANON1102778',                 # PART 1
-        '0012_ANON4982869',                 # PART 1
-        '0013_ANON7362087',                 # PART 1
-        '0014_ANON3951049',                 # PART 1
-        '0015_ANON9844606',                 # PART 1
-        '0018_ANON9843837',                 # PART 1
-        '0019_ANON7657657',                 # PART 1
-        '0020_ANON1562419',                 # PART 1
-        '0021_ANON4277586',                 # PART 1
-        '0023_ANON6964611',                 # PART 1
-        '0024_ANON7992094',                 # PART 1
-        '0026_ANON3620419',                 # PART 1
-        '0027_ANON9724912',                 # PART 1
+        # '0006_ANON2379607',     # DONE    # PART 1
+        # '0007_ANON1586301',     # DONE    # PART 1
+        # '0008_ANON8890538',     # DONE    # PART 1
+        # '0010_ANON7748752',     # DONE    # PART 1
+        # '0011_ANON1102778',     # DONE    # PART 1
+        # '0012_ANON4982869',     # DONE    # PART 1
+        # '0013_ANON7362087',     # DONE    # PART 1
+        # '0014_ANON3951049',     # DONE    # PART 1
+        # '0015_ANON9844606',     # DONE    # PART 1
+        # '0018_ANON9843837',     # DONE    # PART 1
+        # '0019_ANON7657657',     # DONE    # PART 1
+        # '0020_ANON1562419',     # DONE    # PART 1
+        # '0021_ANON4277586',     # DONE    # PART 1
+        # '0023_ANON6964611',     # DONE    # PART 1
+        # '0024_ANON7992094',     # DONE    # PART 1
+        # '0026_ANON3620419',     # DONE    # PART 1
+        # '0027_ANON9724912',     # DONE    # PART 1
         # '0028_ANON3394777',           # PART 2
         # '0029_ANON7189994',           # PART 2
         # '0030_ANON3397001',           # PART 2
@@ -333,46 +333,46 @@ def main():
         # '0104_ANON7748630',           # PART 4
         # '0105_ANON9883201',           # PART 4
         # '0107_ANON4035085',           # PART 4
-        # '0108_ANON0424679',              # PART 5
-        # '0109_ANON9816976',              # PART 5
-        # '0110_ANON8266491',              # PART 5
-        # '0111_ANON9310466',              # PART 5
-        # '0112_ANON3210850',              # PART 5
-        # '0113_ANON9665113',              # PART 5
-        # '0115_ANON0400743',              # PART 5
-        # '0116_ANON9223478',              # PART 5
-        # '0118_ANON7141024',              # PART 5
-        # '0119_ANON3865800',              # PART 5
-        # '0120_ANON7275574',              # PART 5
-        # '0121_ANON9629161',              # PART 5
-        # '0123_ANON7265874',              # PART 5
-        # '0124_ANON8610762',              # PART 5
-        # '0125_ANON0272089',              # PART 5
-        # '0126_ANON4747182',              # PART 5
-        # '0127_ANON8023509',              # PART 5
-        # '0128_ANON8627051',              # PART 5
-        # '0129_ANON5344332',              # PART 5
-        # '0135_ANON9879440',              # PART 5
-        # '0136_ANON8096961',           # PART 6
-        # '0137_ANON8035619',           # PART 6
-        # '0138_ANON1747790',           # PART 6
-        # '0139_ANON2666319',           # PART 6
-        # '0140_ANON0899488',           # PART 6
-        # '0141_ANON8018038',           # PART 6
-        # '0142_ANON7090827',           # PART 6
-        # '0143_ANON9752849',           # PART 6
-        # '0144_ANON2255419',           # PART 6
-        # '0145_ANON0335209',           # PART 6
-        # '0146_ANON7414571',           # PART 6
-        # '0148_ANON9604223',           # PART 6
-        # '0149_ANON4712664',           # PART 6
-        # '0150_ANON5824292',           # PART 6
-        # '0152_ANON2411221',           # PART 6
-        # '0153_ANON5958718',           # PART 6
-        # '0155_ANON7828652',           # PART 6
-        # '0157_ANON9873056',           # PART 6
-        # '0159_ANON9720717',           # PART 6
-        # '0160_ANON3504149'            # PART 6
+        '0108_ANON0424679',              # PART 5
+        '0109_ANON9816976',              # PART 5
+        '0110_ANON8266491',              # PART 5
+        '0111_ANON9310466',              # PART 5
+        '0112_ANON3210850',              # PART 5
+        '0113_ANON9665113',              # PART 5
+        '0115_ANON0400743',              # PART 5
+        '0116_ANON9223478',              # PART 5
+        '0118_ANON7141024',              # PART 5
+        '0119_ANON3865800',              # PART 5
+        '0120_ANON7275574',              # PART 5
+        '0121_ANON9629161',              # PART 5
+        '0123_ANON7265874',              # PART 5
+        '0124_ANON8610762',              # PART 5
+        '0125_ANON0272089',              # PART 5
+        '0126_ANON4747182',              # PART 5
+        '0127_ANON8023509',              # PART 5
+        '0128_ANON8627051',              # PART 5
+        '0129_ANON5344332',              # PART 5
+        '0135_ANON9879440',              # PART 5
+        '0136_ANON8096961',           # PART 6
+        '0137_ANON8035619',           # PART 6
+        '0138_ANON1747790',           # PART 6
+        '0139_ANON2666319',           # PART 6
+        '0140_ANON0899488',           # PART 6
+        '0141_ANON8018038',           # PART 6
+        '0142_ANON7090827',           # PART 6
+        '0143_ANON9752849',           # PART 6
+        '0144_ANON2255419',           # PART 6
+        '0145_ANON0335209',           # PART 6
+        '0146_ANON7414571',           # PART 6
+        '0148_ANON9604223',           # PART 6
+        '0149_ANON4712664',           # PART 6
+        '0150_ANON5824292',           # PART 6
+        '0152_ANON2411221',           # PART 6
+        '0153_ANON5958718',           # PART 6
+        '0155_ANON7828652',           # PART 6
+        '0157_ANON9873056',           # PART 6
+        '0159_ANON9720717',           # PART 6
+        '0160_ANON3504149'            # PART 6
     ]
     # pat_ids = [pid.split('_')[0] for pid in patients]
 
